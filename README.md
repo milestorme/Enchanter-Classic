@@ -1,0 +1,78 @@
+<p align="center">
+  <img src="art/enchanter_icon.png" width="140" alt="Enchanter icon">
+</p>
+
+<h1 align="center">Enchanter</h1>
+
+<p align="center">
+  Never miss another enchant request in trade chat.
+</p>
+
+<p align="center">
+  <img src="art/enchanter_banner.png" width="100%" alt="Enchanter banner">
+</p>
+
+## About
+
+**Enchanter** watches general/trade chat for players looking for enchants and automatically whispers them back with a list of the enchants you know how to make — so you can keep questing, farming, or AFK-ing at the auction house without babysitting chat.
+
+- **Interface:** 11509 (WoW Classic Era, patch 1.15.9)
+- **Version:** 1.6
+- **Original Author:** Vyscî-Whitemane
+
+## Features
+
+- **Automatic scanning** — `/e scan` reads your known Enchanting recipes directly from your profession window and builds a list of what you can offer, including clickable item links for anyone who asks "what mats do you need?"
+- **Smart chat detection** — recognizes both specific requests (someone naming an enchant) and generic ones like "LF Enchanter," then replies with a matching whisper.
+- **Configurable tags** — customize the keywords/tags used to match each recipe and the prefixes used to detect requests.
+- **Auto-invite option** — optionally invite requesters straight to a trade.
+- **Blacklist support** — ignore specific players entirely.
+- **Nether mats toggle** — exclude recipes that require Nether materials (e.g. Enchant Boots - Surefooted).
+- **Delay options** — add a delay before whispering/inviting so you don't look like a bot.
+- **Session earnings tracker** — `/e summary` prints total gold earned from trades this session.
+- **In-game options panel** — `/e config` for a full settings UI.
+
+## Installation
+
+1. Download the latest release (or clone this repo).
+2. Extract/copy the `Enchanter` folder into your `Interface/AddOns/` directory.
+3. Restart WoW or `/reload`.
+
+## Commands
+
+| Command | Description |
+|---|---|
+| `/e scan` | Scan and store your known enchant recipes (run once, and again after learning new recipes) |
+| `/e start` | Start monitoring chat for requests |
+| `/e stop` / `/e pause` | Pause the addon |
+| `/e config` / `/e setup` / `/e options` | Open the settings panel |
+| `/e debug` | Toggle debug messages |
+| `/e summary` | Show gold earned this session |
+| `/e reset` / `/e default` | Reset all settings to default |
+| `/e about` / `/e usage` | Quick usage reminder |
+
+`/ec` and `/enchanter` also work as aliases for `/e`.
+
+## Getting Started
+
+1. Learn Enchanting and log in on your enchanter.
+2. Run `/e scan` to store your known recipes.
+3. Run `/e start` to begin watching chat.
+4. (Optional) Run `/e config` to tweak tags, blacklist, auto-invite, and delays.
+
+## Compatibility
+
+This fork targets **WoW Classic Era, patch 1.15.9** (`## Interface: 11509`). If you're running a different Classic flavor, you may need to adjust the Interface line in `Enchanter.toc` to match your client version.
+
+## Changelog
+
+See [change_log.txt](Enchanter/change_log.txt) for the full version history.
+
+## Credits
+
+- **Original Author:** Vyscî-Whitemane — created the original Enchanter addon and all core logic, chat parsing, and options.
+- This repository packages an interface-version update to keep the addon working on current Classic Era clients (1.15.9).
+
+## License
+
+No license was specified by the original author. If you plan to redistribute or modify this addon, please credit **Vyscî-Whitemane** as the original creator.
