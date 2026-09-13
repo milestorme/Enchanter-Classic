@@ -72,9 +72,10 @@ end
 function EC.OptionsUpdate() 
 
 	EC.UpdateTags()
-	EC.BlackList = EC.Tool.Split(EC.DB.Custom.BlackList:lower(), ",")
-	EC.PrefixTags = EC.Tool.Split(EC.DB.Custom.SearchPrefix:lower(), ",")
-	EC.EnchanterTags = EC.Tool.Split(EC.DB.Custom.GenericPrefix:lower(), ",")
+	EC.BlackList = EC.Tool.Split(tostring(EC.DB.Custom.BlackList or ""):lower(), ",")
+	EC.PrefixTags = EC.Tool.Split(tostring(EC.DB.Custom.SearchPrefix or ""):lower(), ",")
+	EC.EnchanterTags = EC.Tool.Split(tostring(EC.DB.Custom.GenericPrefix or ""):lower(), ",")
+	if EC.Initalized and EC.InitPatterns then EC.InitPatterns() end
 end
 
 function EC.OptionsInit ()
@@ -144,14 +145,14 @@ function EC.OptionsInit ()
 
 	EC.OptionsBuilder.AddHeaderToCurrentPanel("Search Patterns")
 	EC.OptionsBuilder.Indent(10)
-	EC.OptionsBuilder.AddTextToCurrentPanel('Enter your own unique search patterns here. You must use "," (comma) as the seperator with no space after it', 450+200)
+	EC.OptionsBuilder.AddTextToCurrentPanel('Enter your own unique search patterns here. You must use "," (comma) as the separator with no space after it', 450+200)
 	EC.OptionsBuilder.AddSpacerToPanel()
 
 	-- Message String
 	MakeEditBoxSaved(EC.DB, "MsgPrefix", "I can do ", "Message Prefix", 445, 200, false)
 
 	-- LF Enchanter Msg String
-	MakeEditBoxSaved(EC.DB, "LfWhisperMsg", "What you looking for?", "Generic request wisper message", 445, 200, false)
+	MakeEditBoxSaved(EC.DB, "LfWhisperMsg", "What you looking for?", "Generic request whisper message", 445, 200, false)
 	EC.OptionsBuilder.AddSpacerToPanel()
 
 	local prefixTags = EC.Tool.Combine(EC.PrefixTags, ",")

@@ -205,6 +205,8 @@ local function FinishScan(linkless)
 	if EC.DB.NetherRecipes then
 		for _, v in pairs(EC.RecipesWithNether) do
 			EC.DBChar.RecipeList[v] = nil
+			EC.DBChar.RecipeLinks[v] = nil
+			EC.DBChar.RecipeMats[v] = nil
 		end
 	end
 
@@ -255,6 +257,7 @@ local function FinishScan(linkless)
 	end
 
 	EC.PreScanRecipeList = nil
+	EC.PreScanRecipeData = nil
 end
 
 local function PollScan(attemptsLeft)
@@ -303,6 +306,14 @@ function EC.GetItems()
 	for recipe in pairs(EC.DBChar.RecipeList or {}) do
 		EC.PreScanRecipeList[recipe] = true
 	end
+	-- Keep a complete snapshot until the scan succeeds. If Enchanting fails to
+	-- open, we restore the previous working scan instead of leaving the addon
+	-- with an empty recipe database.
+	EC.PreScanRecipeData = {
+		RecipeList = EC.DBChar.RecipeList,
+		RecipeLinks = EC.DBChar.RecipeLinks,
+		RecipeMats = EC.DBChar.RecipeMats,
+	}
 
 	EC.DBChar.RecipeList = {}
 	EC.DBChar.RecipeLinks = {}
@@ -325,7 +336,14 @@ function EC.GetItems()
 	C_Timer.After(8, function()
 		if EC.ScanPending then
 			EC.ScanPending = false
-			print("|cFFFF1C1C Enchanter:|r couldn't detect the Enchanting window opening. Make sure it's open and run /ec scan again.")
+			if EC.PreScanRecipeData then
+				EC.DBChar.RecipeList = EC.PreScanRecipeData.RecipeList or {}
+				EC.DBChar.RecipeLinks = EC.PreScanRecipeData.RecipeLinks or {}
+				EC.DBChar.RecipeMats = EC.PreScanRecipeData.RecipeMats or {}
+			end
+			EC.PreScanRecipeData = nil
+			EC.PreScanRecipeList = nil
+			print("|cFFFF1C1C Enchanter:|r couldn't detect the Enchanting window opening. Previous scan preserved; make sure Enchanting is open and run /ec scan again.")
 		end
 	end)
 end
@@ -351,7 +369,7 @@ function EC.Init()
 	EC.SessionTrades = EC.DBChar.Earnings.Current.Trades or 0
 
 	EC.Tool.SlashCommand({"/ec", "/enchanter", "/e"},{
-		{"scan","MUST BE RAN PRIOR TO /ee start. Scans and stores your enchanting recipes to be used when filter for requests. NOTE: You need to rerun this when you learn new recipes",function()
+		{"scan","MUST BE RAN PRIOR TO /ec start. Scans and stores your enchanting recipes for request matching. NOTE: You need to rerun this when you learn new recipes",function()
 			EC.GetItems()
 			end},
 		{{"stop", "pause"},"Pauses addon",function()
@@ -423,42 +441,72 @@ local function TrimText(value)
 end
 
 function EC.InitPatterns()
-	-- Rebuild from scratch.  InitPatterns can be called again after a rescan/options
-	-- change, so retaining old entries can otherwise leave stale/duplicate aliases.
+	-- Rebuild from scratch. Store normalized *literal* strings rather than Lua
+	-- patterns so custom text containing %, [, -, etc. can never break matching.
 	wipe(EC.PrefixTagsCompiled)
 	wipe(EC.BlacklistCompiled)
 	wipe(EC.RecipeTagsMap)
 	wipe(EC.RecipeTagList)
 
-	for _, v in pairs(EC.PrefixTags) do
+	for _, v in pairs(EC.PrefixTags or {}) do
 		v = TrimText(v)
-		if v then
-			v = v:lower()
-			table.insert(EC.PrefixTagsCompiled, "%f[%w_]" .. v .. "%f[^%w_]")
-		end
+		if v then table.insert(EC.PrefixTagsCompiled, v:lower()) end
 	end
 
-	for _, v in pairs(EC.BlackList) do
+	for _, v in pairs(EC.BlackList or {}) do
 		v = TrimText(v)
-		if v then
-			v = v:lower()
-			table.insert(EC.BlacklistCompiled, "%f[%w_]" .. v .. "%f[^%w_]")
-		end
+		if v then table.insert(EC.BlacklistCompiled, v:lower()) end
 	end
 
-	for recipe, tags in pairs(EC.DBChar.RecipeList) do
+	for recipe, tags in pairs(EC.DBChar.RecipeList or {}) do
 		if type(tags) == "table" then
 			for _, tag in pairs(tags) do
 				tag = TrimText(tag)
 				if tag then
 					tag = tag:lower()
-					EC.RecipeTagsMap[tag] = recipe
-					table.insert(EC.RecipeTagList, tag)
+					if not EC.RecipeTagsMap[tag] then
+						EC.RecipeTagsMap[tag] = {}
+						table.insert(EC.RecipeTagList, tag)
+					end
+					table.insert(EC.RecipeTagsMap[tag], recipe)
 				end
 			end
 		end
 	end
+
+	-- Longer phrases first makes debug output/matches deterministic and avoids a
+	-- short alias winning simply because pairs() happened to enumerate it first.
+	table.sort(EC.RecipeTagList, function(a, b)
+		if #a == #b then return a < b end
+		return #a > #b
+	end)
 end
+
+local function IsWordChar(ch)
+	return ch ~= nil and ch ~= "" and ch:match("[%w_]") ~= nil
+end
+
+local function ContainsLiteralTag(text, tag)
+	if type(text) ~= "string" or type(tag) ~= "string" or tag == "" then return false end
+	local from = 1
+	while true do
+		local first, last = text:find(tag, from, true)
+		if not first then return false end
+
+		local leftOK = true
+		local rightOK = true
+		if IsWordChar(tag:sub(1, 1)) and first > 1 then
+			leftOK = not IsWordChar(text:sub(first - 1, first - 1))
+		end
+		if IsWordChar(tag:sub(-1)) and last < #text then
+			rightOK = not IsWordChar(text:sub(last + 1, last + 1))
+		end
+
+		if leftOK and rightOK then return true end
+		from = first + 1
+	end
+end
+
 
 -- Sends a msg with the enchanting links that enchanter is capable of doing
 function EC.SendMsg(name)
@@ -496,15 +544,15 @@ function EC.ParseMessage(msg, name)
 	end
 	local msgParse = msg:lower()
 	local isRequestValid = false
-	for _, v in pairs(EC.PrefixTagsCompiled) do 
-		if string.find(msgParse, v) then -- Important so it doesn't match things like LFW
+	for _, v in ipairs(EC.PrefixTagsCompiled) do
+		if ContainsLiteralTag(msgParse, v) then -- prevents LF matching LFW, etc.
 			isRequestValid = true
 			break
 		end
 	end
 
-	for _, v in pairs (EC.BlacklistCompiled) do 
-		if string.find(msgParse, v) then
+	for _, v in ipairs(EC.BlacklistCompiled) do
+		if ContainsLiteralTag(msgParse, v) then
 			if EC.DBChar.Debug == true then
 				print("Request: " .. msg .. " is being blacklisted due to tag: " .. v)
 			end
@@ -519,18 +567,28 @@ function EC.ParseMessage(msg, name)
 	-- use precomputed tag list/map for faster lookup
 	-- iterate over every known tag rather than scanning each recipe
 	for _, tag in ipairs(EC.RecipeTagList) do
-		if string.find(msgParse, tag, 1, true) then
-			local recipe = EC.RecipeTagsMap[tag]
-			if recipe then
+		if ContainsLiteralTag(msgParse, tag) then
+			local recipes = EC.RecipeTagsMap[tag]
+			if recipes then
 				if not EC.LfRecipeList[name] then EC.LfRecipeList[name] = {} end
-				if EC.DBChar.Debug == true then
-					print("User should be invited for msg: " .. msg)
-					print("Due to tag: " .. tag .. " -> recipe " .. tostring(recipe))
+				for _, recipe in ipairs(recipes) do
+					if EC.DBChar.Debug == true then
+						print("User should be invited for msg: " .. msg)
+						print("Due to tag: " .. tag .. " -> recipe " .. tostring(recipe))
+					end
+					shouldInvite = true
+					EC.LfRecipeList[name][recipe] = tag
 				end
-				shouldInvite = true
-				EC.LfRecipeList[name][recipe] = tag
+
 				if alreadyInvited == false and EC.PlayerList[name] == nil and EC.DBChar.Debug ~= true and EC.DB.AutoInvite then
-					C_Timer.After(EC.DB.InviteTimeDelay, function()  C_PartyInfo.InviteUnit(name) end)
+					local delay = math.max(0, tonumber(EC.DB.InviteTimeDelay) or 0)
+					C_Timer.After(delay, function()
+						-- Re-check settings at execution time so /ec stop or disabling
+						-- Auto Invite during the delay cannot fire a stale invite.
+						if EC.Initalized and not EC.DBChar.Stop and EC.DB.AutoInvite then
+							C_PartyInfo.InviteUnit(name)
+						end
+					end)
 					alreadyInvited = true
 				end
 			end
@@ -570,7 +628,12 @@ function EC.ParseMessage(msg, name)
 
 		if isGenericEnchantRequest then 
 			EC.PlayerList[name] = 1
-			C_Timer.After(EC.DB.WhisperTimeDelay, function() SendChatMessage(EC.DB.LfWhisperMsg, "WHISPER", nil, name) end)
+			local delay = math.max(0, tonumber(EC.DB.WhisperTimeDelay) or 0)
+			C_Timer.After(delay, function()
+				if EC.Initalized and not EC.DBChar.Stop and EC.DB.WhisperLfRequests then
+					SendChatMessage(EC.DB.LfWhisperMsg, "WHISPER", nil, name)
+				end
+			end)
 		end
 	end
 end
