@@ -20,10 +20,48 @@ EC.RecipeTagList = {}
 -- NOTE: GetCraftRecipeLink() can return nil for a recipe if the client hasn't
 -- finished loading that recipe's link data yet - but for a small number of
 -- recipes (older/superseded formulas) it can also just never return a link
--- at all, no matter how long you wait. SendMsg() already falls back to the
--- plain recipe name when there's no link (see below), so a missing link is
--- NOT fatal: we still record the recipe for tag-matching, and only report
--- the linkless ones as an FYI rather than treating the whole scan as failed.
+-- at all, no matter how long you wait. When that happens we fall back to a
+-- plain-text materials list built from the reagent API (see below), which
+-- doesn't depend on the same caching quirk, so mats still get whispered
+-- correctly even without a clickable formula link.
+local function BuildReagentText(index)
+	if type(GetCraftNumReagents) ~= "function" or type(GetCraftReagentInfo) ~= "function" then
+		return nil
+	end
+
+	local ok, numReagents = pcall(GetCraftNumReagents, index)
+	if not ok or not numReagents or numReagents == 0 then return nil end
+
+	local parts = {}
+	for r = 1, numReagents do
+		local okR, reagentName, _, numRequired = pcall(GetCraftReagentInfo, index, r)
+		if okR and reagentName then
+			table.insert(parts, (numRequired and numRequired > 0) and (numRequired .. "x " .. reagentName) or reagentName)
+		end
+	end
+
+	if #parts == 0 then return nil end
+	return table.concat(parts, ", ")
+end
+
+local function TryForceCraftSelect(index)
+	if type(CraftFrame_SelectCraft) == "function" then
+		if pcall(CraftFrame_SelectCraft, index) then return end
+	end
+	if type(CraftFrame_SetSelection) == "function" then
+		if pcall(CraftFrame_SetSelection, index) then return end
+	end
+	if CraftFrame and type(CraftFrame_Update) == "function" then
+		pcall(function()
+			CraftFrame.selectedSkill = index
+			CraftFrame_Update()
+		end)
+	end
+	if type(GetCraftItemLink) == "function" then
+		pcall(GetCraftItemLink, index)
+	end
+end
+
 local function ScanCraftLinksOnce(verbose)
 	local stillPending = false -- recipes that might just need more time
 	local linkless = {}        -- recipes recorded, but with no link (ever)
@@ -33,12 +71,18 @@ local function ScanCraftLinksOnce(verbose)
 		local tag = EC.RecipeTags["enGB"][craftName]
 		if tag ~= nil then
 			local link = GetCraftRecipeLink(i)
+			if not link then
+				TryForceCraftSelect(i)
+				link = GetCraftRecipeLink(i)
+			end
 			EC.DBChar.RecipeList[craftName] = tag
 			if link then
 				EC.DBChar.RecipeLinks[craftName] = link
+				EC.DBChar.RecipeMats[craftName] = nil
 			else
 				stillPending = true
 				table.insert(linkless, craftName)
+				EC.DBChar.RecipeMats[craftName] = BuildReagentText(i)
 			end
 		end
 	end
@@ -59,6 +103,13 @@ local function FinishScan(linkless)
 		for _, v in pairs(EC.RecipesWithNether) do
 			EC.DBChar.RecipeList[v] = nil
 		end
+	end
+
+	-- Restore whatever recipe was actually selected before we started
+	-- force-selecting rows to coax their link data loose.
+	if EC.PreScanSelection then
+		TryForceCraftSelect(EC.PreScanSelection)
+		EC.PreScanSelection = nil
 	end
 
 	print("Scan Completed")
@@ -110,8 +161,10 @@ end
 function EC.GetItems()
 	EC.DBChar.RecipeList = {}
 	EC.DBChar.RecipeLinks = {}
+	EC.DBChar.RecipeMats = {}
 	EC.ScanPending = true
 	EC.ScanStarted = false
+	EC.PreScanSelection = (CraftFrame and CraftFrame.selectedSkill) or nil
 
 	CastSpellByName("Enchanting")
 
@@ -144,6 +197,7 @@ function EC.Init()
 	-- Initialize DB Variables if not set
 	if not EC.DBChar.RecipeList then EC.DBChar.RecipeList = {} end
 	if not EC.DBChar.RecipeLinks then EC.DBChar.RecipeLinks = {} end
+	if not EC.DBChar.RecipeMats then EC.DBChar.RecipeMats = {} end
 	if not EC.DB.Custom then EC.DB.Custom={} end
 	if not EC.DBChar.Stop then EC.DBChar.Stop = false end
 	if not EC.DBChar.Debug then EC.DBChar.Debug = false end
@@ -229,9 +283,17 @@ function EC.SendMsg(name)
 		if EC.LfRecipeList[name] ~= nil then
 			local msg = EC.DB.MsgPrefix
 			for k, _ in pairs(EC.LfRecipeList[name]) do
-				-- Fall back to the plain recipe name if the link wasn't cached
-				-- (e.g. scanned before the craft window fully loaded)
-				msg = msg .. (EC.DBChar.RecipeLinks[k] or k)
+				-- Fall back to name + plain-text materials if the link wasn't
+				-- cached (e.g. scanned before the craft window fully loaded,
+				-- or a recipe whose formula link never resolves), or just the
+				-- plain name if we couldn't get materials either.
+				if EC.DBChar.RecipeLinks[k] then
+					msg = msg .. EC.DBChar.RecipeLinks[k]
+				elseif EC.DBChar.RecipeMats and EC.DBChar.RecipeMats[k] then
+					msg = msg .. k .. " (mats: " .. EC.DBChar.RecipeMats[k] .. ")"
+				else
+					msg = msg .. k
+				end
 			end
 			if EC.DBChar.Debug == true then
 				print("Debug mode: would whisper to " .. name .. ": " .. msg)

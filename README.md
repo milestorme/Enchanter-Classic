@@ -17,7 +17,7 @@
 **Enchanter** watches general/trade chat for players looking for enchants and automatically whispers them back with a list of the enchants you know how to make — so you can keep questing, farming, or AFK-ing at the auction house without babysitting chat.
 
 - **Interface:** 11509 (WoW Classic Era, patch 1.15.9)
-- **Version:** 1.6.1
+- **Version:** 1.6.2
 - **Original Author:** Vyscî-Whitemane
 
 ## Features
@@ -27,7 +27,6 @@
 - **Configurable tags** — customize the keywords/tags used to match each recipe and the prefixes used to detect requests.
 - **Auto-invite option** — optionally invite requesters straight to a trade.
 - **Blacklist support** — ignore specific players entirely.
-- **Nether mats toggle** — exclude recipes that require Nether materials (e.g. Enchant Boots - Surefooted).
 - **Delay options** — add a delay before whispering/inviting so you don't look like a bot.
 - **Session earnings tracker** — `/ec summary` prints total gold earned from trades this session.
 - **In-game options panel** — `/ec config` for a full settings UI.
