@@ -107,24 +107,73 @@ EC.RecipeTagList = {}
 -- plain-text materials list built from the reagent API (see below), which
 -- doesn't depend on the same caching quirk, so mats still get whispered
 -- correctly even without a clickable formula link.
+local function GetReagentData(index, reagentIndex)
+	if type(GetCraftReagentItemLink) ~= "function" then
+		return nil, nil
+	end
+
+	local ok, itemLink = pcall(GetCraftReagentItemLink, index, reagentIndex)
+	if not ok or type(itemLink) ~= "string" or itemLink == "" then
+		return nil, nil
+	end
+
+	local itemID = tonumber(itemLink:match("|Hitem:(%d+)"))
+	local itemName
+
+	if itemID and C_Item and type(C_Item.GetItemNameByID) == "function" then
+		itemName = C_Item.GetItemNameByID(itemID)
+	end
+
+	if (not itemName or itemName == "") and itemID and type(GetItemInfo) == "function" then
+		itemName = GetItemInfo(itemID)
+	end
+
+	if not itemName or itemName == "" then
+		itemName = itemLink:match("%[(.-)%]")
+	end
+
+	if not itemName or itemName == "" then
+		return nil, nil
+	end
+
+	return itemName, itemLink
+end
+
 local function BuildReagentText(index)
 	if type(GetCraftNumReagents) ~= "function" or type(GetCraftReagentInfo) ~= "function" then
-		return nil
+		return nil, nil, false
 	end
 
 	local ok, numReagents = pcall(GetCraftNumReagents, index)
-	if not ok or not numReagents or numReagents == 0 then return nil end
+	if not ok or not numReagents or numReagents == 0 then
+		return nil, nil, false
+	end
 
-	local parts = {}
-	for r = 1, numReagents do
-		local okR, reagentName, _, numRequired = pcall(GetCraftReagentInfo, index, r)
-		if okR and reagentName then
-			table.insert(parts, (numRequired and numRequired > 0) and (numRequired .. "x " .. reagentName) or reagentName)
+	local plainParts = {}
+	local linkedParts = {}
+	local pending = false
+
+	for reagentIndex = 1, numReagents do
+		local okReagent, _, _, numRequired = pcall(GetCraftReagentInfo, index, reagentIndex)
+		if okReagent then
+			local reagentName, reagentLink = GetReagentData(index, reagentIndex)
+			if reagentName and reagentLink then
+				local amount = tonumber(numRequired) or 0
+				table.insert(plainParts, amount > 0 and (amount .. "x " .. reagentName) or reagentName)
+				table.insert(linkedParts, amount > 0 and (amount .. "x " .. reagentLink) or reagentLink)
+			else
+				pending = true
+			end
+		else
+			pending = true
 		end
 	end
 
-	if #parts == 0 then return nil end
-	return table.concat(parts, ", ")
+	if pending or #plainParts ~= numReagents or #linkedParts ~= numReagents then
+		return nil, nil, true
+	end
+
+	return table.concat(plainParts, ", "), table.concat(linkedParts, ", "), false
 end
 
 local function TryForceCraftSelect(index)
@@ -181,9 +230,20 @@ local function ScanCraftLinksOnce(verbose)
 				link = GetClickableCraftLink(i)
 			end
 			EC.DBChar.RecipeList[craftName] = tag
-			-- Keep reagent text even when a clickable enchant link is available.
-			-- The hyperlink tooltip is useful locally, but the customer needs the mats in the whisper.
-			EC.DBChar.RecipeMats[craftName] = BuildReagentText(i)
+			local reagentText, reagentLinks, reagentPending = BuildReagentText(i)
+			if reagentText then
+				EC.DBChar.RecipeMats[craftName] = reagentText
+			else
+				EC.DBChar.RecipeMats[craftName] = nil
+			end
+			if reagentLinks then
+				EC.DBChar.RecipeMatsLinks[craftName] = reagentLinks
+			else
+				EC.DBChar.RecipeMatsLinks[craftName] = nil
+			end
+			if reagentPending then
+				stillPending = true
+			end
 			if link then
 				EC.DBChar.RecipeLinks[craftName] = link
 			else
@@ -210,6 +270,7 @@ local function FinishScan(linkless)
 			EC.DBChar.RecipeList[v] = nil
 			EC.DBChar.RecipeLinks[v] = nil
 			EC.DBChar.RecipeMats[v] = nil
+			EC.DBChar.RecipeMatsLinks[v] = nil
 		end
 	end
 
@@ -316,11 +377,13 @@ function EC.GetItems()
 		RecipeList = EC.DBChar.RecipeList,
 		RecipeLinks = EC.DBChar.RecipeLinks,
 		RecipeMats = EC.DBChar.RecipeMats,
+		RecipeMatsLinks = EC.DBChar.RecipeMatsLinks,
 	}
 
 	EC.DBChar.RecipeList = {}
 	EC.DBChar.RecipeLinks = {}
 	EC.DBChar.RecipeMats = {}
+	EC.DBChar.RecipeMatsLinks = {}
 	EC.ScanPending = true
 	EC.ScanStarted = false
 	EC.PreScanSelection = (CraftFrame and CraftFrame.selectedSkill) or nil
@@ -343,6 +406,7 @@ function EC.GetItems()
 				EC.DBChar.RecipeList = EC.PreScanRecipeData.RecipeList or {}
 				EC.DBChar.RecipeLinks = EC.PreScanRecipeData.RecipeLinks or {}
 				EC.DBChar.RecipeMats = EC.PreScanRecipeData.RecipeMats or {}
+				EC.DBChar.RecipeMatsLinks = EC.PreScanRecipeData.RecipeMatsLinks or {}
 			end
 			EC.PreScanRecipeData = nil
 			EC.PreScanRecipeList = nil
@@ -364,6 +428,7 @@ function EC.Init()
 	if not EC.DBChar.RecipeList then EC.DBChar.RecipeList = {} end
 	if not EC.DBChar.RecipeLinks then EC.DBChar.RecipeLinks = {} end
 	if not EC.DBChar.RecipeMats then EC.DBChar.RecipeMats = {} end
+	if not EC.DBChar.RecipeMatsLinks then EC.DBChar.RecipeMatsLinks = {} end
 	if not EC.DB.Custom then EC.DB.Custom={} end
 	if not EC.DBChar.Stop then EC.DBChar.Stop = false end
 	if not EC.DBChar.Debug then EC.DBChar.Debug = false end
@@ -587,11 +652,74 @@ local function MarkPlayerResponded(name)
 	EC.PlayerList[name] = GetTime()
 end
 
-local function NormalizeGenericRequest(value)
-	if type(value) ~= "string" then return "" end
-	return value:lower():gsub("[%s%p]+", "")
+local GENERIC_REQUEST_FILLER_WORDS = {
+	["a"] = true,
+	["an"] = true,
+	["any"] = true,
+	["anyone"] = true,
+	["available"] = true,
+	["enchant"] = true,
+	["enchanter"] = true,
+	["enchanting"] = true,
+	["for"] = true,
+	["lf"] = true,
+	["looking"] = true,
+	["need"] = true,
+	["needed"] = true,
+	["please"] = true,
+	["pls"] = true,
+	["plz"] = true,
+	["someone"] = true,
+	["want"] = true,
+}
+
+local function IsGenericEnchantRequest(message)
+	if type(message) ~= "string" then
+		return false
+	end
+
+	local normalized = message:lower():gsub("[^%w]+", " ")
+	local sawEnchanterWord = false
+
+	for word in normalized:gmatch("%S+") do
+		if word == "enchanter" or word == "enchanting" or word == "enchant" then
+			sawEnchanterWord = true
+		end
+
+		if not GENERIC_REQUEST_FILLER_WORDS[word] then
+			return false
+		end
+	end
+
+	return sawEnchanterWord
 end
 
+
+local function SendRecipeResponse(name, recipeName)
+	local recipeDisplay = EC.DBChar.RecipeLinks[recipeName] or recipeName
+	local linkedMats = EC.DBChar.RecipeMatsLinks and EC.DBChar.RecipeMatsLinks[recipeName]
+	local plainMats = EC.DBChar.RecipeMats and EC.DBChar.RecipeMats[recipeName]
+
+	if linkedMats and linkedMats ~= "" then
+		local combinedMessage = EC.DB.MsgPrefix .. recipeDisplay .. " - Mats: " .. linkedMats
+
+		-- Hyperlinks are much longer internally than their visible text.
+		if #combinedMessage <= 240 then
+			SendWhisper(combinedMessage, name)
+		else
+			SendWhisper(EC.DB.MsgPrefix .. recipeDisplay, name)
+			SendWhisper("Mats: " .. linkedMats, name)
+		end
+		return
+	end
+
+	if plainMats and plainMats ~= "" then
+		SendWhisper(EC.DB.MsgPrefix .. recipeDisplay .. " - Mats: " .. plainMats, name)
+		return
+	end
+
+	SendWhisper(EC.DB.MsgPrefix .. recipeDisplay .. " - Mats unavailable; please ask me to rescan.", name)
+end
 
 -- Sends a msg with the enchanting links that enchanter is capable of doing
 function EC.SendMsg(name)
@@ -599,21 +727,14 @@ function EC.SendMsg(name)
 		return
 	end
 
-	for recipeName, _ in pairs(EC.LfRecipeList[name]) do
-		local recipeDisplay = EC.DBChar.RecipeLinks[recipeName] or recipeName
-		local mats = EC.DBChar.RecipeMats and EC.DBChar.RecipeMats[recipeName]
-		local msg = EC.DB.MsgPrefix .. recipeDisplay
-
-		if mats and mats ~= "" then
-			msg = msg .. " - Mats: " .. mats
-		else
-			msg = msg .. " - Mats unavailable; please ask me to rescan."
-		end
-
+	for recipeName in pairs(EC.LfRecipeList[name]) do
 		if EC.DBChar.Debug == true then
-			print("Debug mode: would whisper to " .. name .. ": " .. msg)
+			local linkedMats = EC.DBChar.RecipeMatsLinks and EC.DBChar.RecipeMatsLinks[recipeName]
+			local plainMats = EC.DBChar.RecipeMats and EC.DBChar.RecipeMats[recipeName]
+			print("Debug mode: would whisper to " .. name .. ": " .. recipeName
+				.. " | Mats: " .. tostring(linkedMats or plainMats))
 		else
-			SendWhisper(msg, name)
+			SendRecipeResponse(name, recipeName)
 		end
 	end
 
@@ -699,14 +820,10 @@ function EC.ParseMessage(msg, name)
 		end
 	elseif EC.DB.WhisperLfRequests and isRequestValid and not HasRecentResponse(name) then
 	
-		local isGenericEnchantRequest = false
-		local normalizedMsg = NormalizeGenericRequest(msgParse)
-		for _, v in pairs(EC.EnchanterTags) do
-			local normalizedTag = NormalizeGenericRequest(v)
-			if normalizedTag ~= "" and normalizedMsg:find(normalizedTag, 1, true) then
-				isGenericEnchantRequest = true
-				break
-			end
+		local isGenericEnchantRequest = IsGenericEnchantRequest(msgParse)
+
+		if not isGenericEnchantRequest and EC.DBChar.Debug == true then
+			print("Ignoring unknown specific enchant request from " .. name .. ": " .. msg)
 		end
 
 		if isGenericEnchantRequest then
