@@ -6,7 +6,88 @@ EC.Initalized = false
 EC.PlayerList = {}
 EC.LfRecipeList = {}
 EC.SessionGold = 0
+EC.SessionTrades = 0
 local preTradeGold = nil
+
+-- Persistent earnings use aggregate totals plus a fixed-size session history.
+-- We never store one record per trade, keeping SavedVariables small long-term.
+local MAX_EARNINGS_SESSIONS = 100
+
+local function FormatMoney(copper)
+	copper = math.max(0, math.floor(copper or 0))
+	local gold = math.floor(copper / 10000)
+	local silver = math.floor((copper % 10000) / 100)
+	local copperOnly = copper % 100
+	return string.format("|cFFFFD700%dg|r |cFFC0C0C0%ds|r |cFFB87333%dc|r", gold, silver, copperOnly)
+end
+
+local function EnsureEarningsDB()
+	if type(EC.DBChar.Earnings) ~= "table" then EC.DBChar.Earnings = {} end
+	local db = EC.DBChar.Earnings
+	if type(db.TotalGold) ~= "number" then db.TotalGold = 0 end
+	if type(db.TotalTrades) ~= "number" then db.TotalTrades = 0 end
+	if type(db.Sessions) ~= "table" then db.Sessions = {} end
+	if type(db.Current) ~= "table" then db.Current = {Gold = 0, Trades = 0, Started = time()} end
+	if type(db.Current.Gold) ~= "number" then db.Current.Gold = 0 end
+	if type(db.Current.Trades) ~= "number" then db.Current.Trades = 0 end
+	if type(db.Current.Started) ~= "number" then db.Current.Started = time() end
+	return db
+end
+
+local function CommitCurrentSession()
+	if not EC.DBChar then return end
+	local db = EnsureEarningsDB()
+	local current = db.Current
+	if (current.Gold or 0) <= 0 and (current.Trades or 0) <= 0 then
+		db.Current = {Gold = 0, Trades = 0, Started = time()}
+		EC.SessionGold, EC.SessionTrades = 0, 0
+		return
+	end
+	table.insert(db.Sessions, 1, {
+		Started = current.Started or time(),
+		Ended = time(),
+		Gold = current.Gold or 0,
+		Trades = current.Trades or 0,
+	})
+	while #db.Sessions > MAX_EARNINGS_SESSIONS do table.remove(db.Sessions) end
+	db.Current = {Gold = 0, Trades = 0, Started = time()}
+	EC.SessionGold, EC.SessionTrades = 0, 0
+end
+
+local function RecordEarnings(delta)
+	if delta <= 0 then return end
+	local db = EnsureEarningsDB()
+	db.TotalGold = db.TotalGold + delta
+	db.TotalTrades = db.TotalTrades + 1
+	db.Current.Gold = db.Current.Gold + delta
+	db.Current.Trades = db.Current.Trades + 1
+	EC.SessionGold = db.Current.Gold
+	EC.SessionTrades = db.Current.Trades
+end
+
+local function PrintEarningsSummary()
+	local db = EnsureEarningsDB()
+	local current = db.Current
+	print("|cFFFF1C1CEnchanter|r Earnings Summary")
+	print("  Session:  " .. FormatMoney(current.Gold) .. " | " .. current.Trades .. " trade(s)")
+	print("  Lifetime: " .. FormatMoney(db.TotalGold) .. " | " .. db.TotalTrades .. " trade(s)")
+	print("  History:  " .. #db.Sessions .. " saved session(s), retaining the latest " .. MAX_EARNINGS_SESSIONS)
+end
+
+local function PrintEarningsHistory(limit)
+	local db = EnsureEarningsDB()
+	limit = math.max(1, math.min(20, tonumber(limit) or 10))
+	print("|cFFFF1C1CEnchanter|r Earnings History (latest " .. math.min(limit, #db.Sessions) .. ")")
+	if #db.Sessions == 0 then
+		print("  No completed sessions recorded yet.")
+		return
+	end
+	for i = 1, math.min(limit, #db.Sessions) do
+		local session = db.Sessions[i]
+		local dateText = date("%d/%m/%y %H:%M", session.Ended or session.Started or time())
+		print(string.format("  #%d %s - %s | %d trade(s)", i, dateText, FormatMoney(session.Gold), session.Trades or 0))
+	end
+end
 EC.EnchanterTags = EC.DefaultEnchanterTags
 EC.PrefixTags = EC.DefaultPrefixTags
 EC.RecipeTags = EC.DefaultRecipeTags
@@ -201,6 +282,9 @@ function EC.Init()
 	if not EC.DB.Custom then EC.DB.Custom={} end
 	if not EC.DBChar.Stop then EC.DBChar.Stop = false end
 	if not EC.DBChar.Debug then EC.DBChar.Debug = false end
+	EnsureEarningsDB()
+	EC.SessionGold = EC.DBChar.Earnings.Current.Gold or 0
+	EC.SessionTrades = EC.DBChar.Earnings.Current.Trades or 0
 
 	EC.Tool.SlashCommand({"/ec", "/enchanter", "/e"},{
 		{"scan","MUST BE RAN PRIOR TO /ee start. Scans and stores your enchanting recipes to be used when filter for requests. NOTE: You need to rerun this when you learn new recipes",function()
@@ -233,15 +317,11 @@ function EC.Init()
 				print("Debug mode is now on")
 			end
 		end},
-		{"summary","Prints total gold earned from trades this session",function()
-			local total = EC.SessionGold
-			local gold   = math.floor(total / 10000)
-			local silver = math.floor((total % 10000) / 100)
-			local copper = total % 100
-			print("|cFFFF1C1CEnchanter|r Session Earnings: "
-				.. "|cFFFFD700" .. gold   .. "g|r "
-				.. "|cFFC0C0C0" .. silver .. "s|r "
-				.. "|cFFB87333" .. copper .. "c|r")
+		{"summary","Shows current session and lifetime earnings",function()
+			PrintEarningsSummary()
+		end},
+		{"history","Shows previous earnings sessions. Optional: /ec history 20",function(msg)
+			PrintEarningsHistory(msg)
 		end},
 		{{"about", "usage"},"You need to first run /ec scan this will store your known recipes and will be parsing chat for them (only need to do it 1 time or if you learned new recipes) after run /e start to start looking for requests"},
 	})
@@ -406,7 +486,7 @@ local function Event_TRADE_CLOSED()
 		C_Timer.After(1, function()
 			local delta = GetMoney() - snapshot
 			if delta > 0 then
-				EC.SessionGold = EC.SessionGold + delta
+				RecordEarnings(delta)
 			end
 		end)
 	end
@@ -428,6 +508,10 @@ local function Event_ADDON_LOADED(arg1)
 	end
 end
 
+local function Event_PLAYER_LOGOUT()
+	CommitCurrentSession()
+end
+
 
 
 function EC.OnLoad()
@@ -437,6 +521,7 @@ function EC.OnLoad()
 	EC.Tool.RegisterEvent("CHAT_MSG_YELL",Event_CHAT_MSG_CHANNEL)
 	EC.Tool.RegisterEvent("TRADE_SHOW",Event_TRADE_SHOW)
 	EC.Tool.RegisterEvent("TRADE_CLOSED",Event_TRADE_CLOSED)
+	EC.Tool.RegisterEvent("PLAYER_LOGOUT",Event_PLAYER_LOGOUT)
 	EC.Tool.RegisterEvent("CRAFT_SHOW",Event_CRAFT_SHOW)
 	EC.Tool.RegisterEvent("GET_ITEM_INFO_RECEIVED",Event_GET_ITEM_INFO_RECEIVED)
 end

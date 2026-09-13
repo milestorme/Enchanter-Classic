@@ -17,7 +17,7 @@
 **Enchanter** watches general/trade chat for players looking for enchants and automatically whispers them back with a list of the enchants you know how to make — so you can keep questing, farming, or AFK-ing at the auction house without babysitting chat.
 
 - **Interface:** 11509 (WoW Classic Era, patch 1.15.9)
-- **Version:** 1.6.2
+- **Version:** 1.6.3
 - **Original Author:** Vyscî-Whitemane
 
 ## Features
@@ -29,6 +29,7 @@
 - **Blacklist support** — ignore specific players entirely.
 - **Delay options** — add a delay before whispering/inviting so you don't look like a bot.
 - **Session earnings tracker** — `/ec summary` prints total gold earned from trades this session.
+- **Session history** — `/ec history` shows the previous earning sessions.
 - **In-game options panel** — `/ec config` for a full settings UI.
 
 ## Installation
