@@ -19,10 +19,11 @@ EC.RecipeTagList = {}
 -- Additionally it also stores the recipes clickable link, that will be used when messaging the user (for those people asks what are the mats?)
 -- NOTE: GetCraftRecipeLink() can return nil for a recipe if the client hasn't
 -- finished loading that recipe's link data yet (common for recipes you
--- haven't recently viewed). We retry a few times with a short delay so we
--- don't end up storing a nil link, which would later crash SendMsg().
-local function ScanCraftLinks(attemptsLeft)
-	attemptsLeft = attemptsLeft or 5
+-- haven't recently viewed). Rather than guessing with a fixed timer, we
+-- listen for CRAFT_SHOW/CRAFT_UPDATE (fired when the window opens / new
+-- recipe data streams in from the server) and re-scan whenever they fire,
+-- with a generous timeout as a fallback in case something never arrives.
+local function ScanCraftLinksOnce()
 	local sawMissingLink = false
 
 	for i = 1, GetNumCrafts(), 1 do
@@ -38,10 +39,14 @@ local function ScanCraftLinks(attemptsLeft)
 		end
 	end
 
-	if sawMissingLink and attemptsLeft > 0 then
-		C_Timer.After(0.5, function() ScanCraftLinks(attemptsLeft - 1) end)
-	elseif sawMissingLink then
-		print("|cFFFF1C1C Enchanter:|r some recipe links could not be loaded. Open your Enchanting window and run /ec scan again.")
+	return sawMissingLink
+end
+
+local function FinishScan(sawMissingLink)
+	EC.ScanPending = false
+	if EC.ScanTimeoutTimer then
+		EC.ScanTimeoutTimer:Cancel()
+		EC.ScanTimeoutTimer = nil
 	end
 
 	if EC.DB.NetherRecipes then
@@ -49,15 +54,53 @@ local function ScanCraftLinks(attemptsLeft)
 			EC.DBChar.RecipeList[v] = nil
 		end
 	end
+
+	if sawMissingLink then
+		print("|cFFFF1C1C Enchanter:|r some recipe links could not be loaded. Open your Enchanting window and run /ec scan again.")
+	else
+		print("Scan Completed")
+	end
+end
+
+local function AttemptScan()
+	if not EC.ScanPending then return end
+	if GetNumCrafts() == 0 then return end -- window hasn't populated yet; wait for CRAFT_SHOW/CRAFT_UPDATE
+
+	local sawMissingLink = ScanCraftLinksOnce()
+	if not sawMissingLink then
+		FinishScan(false)
+	end
+	-- if links are still missing, we just wait for the next CRAFT_UPDATE
+	-- (or the timeout) rather than finishing early
+end
+
+local function Event_CRAFT_SHOW()
+	AttemptScan()
+end
+
+local function Event_CRAFT_UPDATE()
+	AttemptScan()
 end
 
 function EC.GetItems()
 	EC.DBChar.RecipeList = {}
 	EC.DBChar.RecipeLinks = {}
+	EC.ScanPending = true
 
 	CastSpellByName("Enchanting")
-	-- Give the craft window a moment to actually populate before reading links
-	C_Timer.After(0.3, function() ScanCraftLinks() end)
+
+	-- Covers the case where the Enchanting window is already open (CRAFT_SHOW
+	-- won't fire again since it's not re-opening), so try immediately too.
+	AttemptScan()
+
+	if EC.ScanTimeoutTimer then
+		EC.ScanTimeoutTimer:Cancel()
+	end
+	EC.ScanTimeoutTimer = C_Timer.NewTimer(8, function()
+		if EC.ScanPending then
+			FinishScan(true)
+		end
+	end)
 end
 
 function EC.Init()
@@ -77,9 +120,8 @@ function EC.Init()
 	if not EC.DBChar.Debug then EC.DBChar.Debug = false end
 
 	EC.Tool.SlashCommand({"/ec", "/enchanter", "/e"},{
-		{"scan","MUST BE RAN PRIOR TO /ee start. Scans and stores your enchanting recipes to be used when filter for requests. NOTE: You need to rerun this when you learn new recipes",function()
+		{"scan","MUST BE RAN PRIOR TO /ec start. Scans and stores your enchanting recipes to be used when filter for requests. NOTE: You need to rerun this when you learn new recipes",function()
 			EC.GetItems()
-			print("Scan Completed")
 			end},
 		{{"stop", "pause"},"Pauses addon",function()
 			EC.DBChar.Stop = true
@@ -118,7 +160,7 @@ function EC.Init()
 				.. "|cFFC0C0C0" .. silver .. "s|r "
 				.. "|cFFB87333" .. copper .. "c|r")
 		end},
-		{{"about", "usage"},"You need to first run /ec scan this will store your known recipes and will be parsing chat for them (only need to do it 1 time or if you learned new recipes) after run /e start to start looking for requests"},
+		{{"about", "usage"},"You need to first run /ec scan this will store your known recipes and will be parsing chat for them (only need to do it 1 time or if you learned new recipes) after run /ec start to start looking for requests"},
 	})
 
 	EC.OptionsInit()
@@ -304,5 +346,7 @@ function EC.OnLoad()
 	EC.Tool.RegisterEvent("CHAT_MSG_YELL",Event_CHAT_MSG_CHANNEL)
 	EC.Tool.RegisterEvent("TRADE_SHOW",Event_TRADE_SHOW)
 	EC.Tool.RegisterEvent("TRADE_CLOSED",Event_TRADE_CLOSED)
+	EC.Tool.RegisterEvent("CRAFT_SHOW",Event_CRAFT_SHOW)
+	EC.Tool.RegisterEvent("CRAFT_UPDATE",Event_CRAFT_UPDATE)
 end
 
