@@ -179,13 +179,14 @@ local function ScanCraftLinksOnce(verbose)
 				link = GetClickableCraftLink(i)
 			end
 			EC.DBChar.RecipeList[craftName] = tag
+			-- Always cache reagent text. Clickable recipe links are useful, but the
+			-- customer should not have to open the tooltip just to learn the mats.
+			EC.DBChar.RecipeMats[craftName] = BuildReagentText(i)
 			if link then
 				EC.DBChar.RecipeLinks[craftName] = link
-				EC.DBChar.RecipeMats[craftName] = nil
 			else
 				stillPending = true
 				table.insert(linkless, craftName)
-				EC.DBChar.RecipeMats[craftName] = BuildReagentText(i)
 			end
 		end
 	end
@@ -508,31 +509,64 @@ local function ContainsLiteralTag(text, tag)
 end
 
 
--- Sends a msg with the enchanting links that enchanter is capable of doing
+-- Sends a whisper containing every matched enchant plus its required materials.
+-- Messages are split when necessary so several requested enchants cannot exceed
+-- Classic's chat-message length limit.
 function EC.SendMsg(name)
-		if EC.LfRecipeList[name] ~= nil then
-			local msg = EC.DB.MsgPrefix
-			for k, _ in pairs(EC.LfRecipeList[name]) do
-				-- Fall back to name + plain-text materials if the link wasn't
-				-- cached (e.g. scanned before the craft window fully loaded,
-				-- or a recipe whose formula link never resolves), or just the
-				-- plain name if we couldn't get materials either.
-				if EC.DBChar.RecipeLinks[k] then
-					msg = msg .. EC.DBChar.RecipeLinks[k]
-				elseif EC.DBChar.RecipeMats and EC.DBChar.RecipeMats[k] then
-					msg = msg .. k .. " (mats: " .. EC.DBChar.RecipeMats[k] .. ")"
-				else
-					msg = msg .. k
-				end
-			end
-			if EC.DBChar.Debug == true then
-				print("Debug mode: would whisper to " .. name .. ": " .. msg)
-			else
-				SendChatMessage(msg, "WHISPER", nil, name)
-				--print("Debug mode: would whisper to " .. name .. ": " .. msg)
-			end
-			EC.LfRecipeList[name] = nil -- Clearing it so it doesn't growing larger unnecessarily 
+	local requested = EC.LfRecipeList[name]
+	if requested == nil then return end
+
+	local recipes = {}
+	for recipe in pairs(requested) do
+		table.insert(recipes, recipe)
+	end
+	table.sort(recipes)
+
+	local messages = {}
+	local prefix = EC.DB.MsgPrefix or "I can do "
+	local current = prefix
+	local maxLength = 240
+
+	for _, recipe in ipairs(recipes) do
+		local display = (EC.DBChar.RecipeLinks and EC.DBChar.RecipeLinks[recipe]) or recipe
+		local mats = EC.DBChar.RecipeMats and EC.DBChar.RecipeMats[recipe]
+		local entry = display
+		if mats and mats ~= "" then
+			entry = entry .. " - Mats: " .. mats
 		end
+
+		local separator = (current == prefix) and "" or "; "
+		if #current + #separator + #entry > maxLength and current ~= prefix then
+			table.insert(messages, current)
+			current = prefix .. entry
+		else
+			current = current .. separator .. entry
+		end
+	end
+
+	if current ~= prefix then
+		table.insert(messages, current)
+	end
+
+	if EC.DBChar.Debug == true then
+		for _, msg in ipairs(messages) do
+			print("Debug mode: would whisper to " .. name .. ": " .. msg)
+		end
+	else
+		for i, msg in ipairs(messages) do
+			if i == 1 then
+				SendChatMessage(msg, "WHISPER", nil, name)
+			else
+				C_Timer.After((i - 1) * 0.15, function()
+					if EC.Initalized and not EC.DBChar.Stop then
+						SendChatMessage(msg, "WHISPER", nil, name)
+					end
+				end)
+			end
+		end
+	end
+
+	EC.LfRecipeList[name] = nil
 end
 
 -- For a message it will attempt to filter the request based on any of the words in EC.PrefixTags
