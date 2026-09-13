@@ -22,15 +22,15 @@
 
 ## Features
 
-- **Automatic scanning** — `/e scan` reads your known Enchanting recipes directly from your profession window and builds a list of what you can offer, including clickable item links for anyone who asks "what mats do you need?"
+- **Automatic scanning** — `/ec scan` reads your known Enchanting recipes directly from your profession window and builds a list of what you can offer, including clickable item links for anyone who asks "what mats do you need?"
 - **Smart chat detection** — recognizes both specific requests (someone naming an enchant) and generic ones like "LF Enchanter," then replies with a matching whisper.
 - **Configurable tags** — customize the keywords/tags used to match each recipe and the prefixes used to detect requests.
 - **Auto-invite option** — optionally invite requesters straight to a trade.
 - **Blacklist support** — ignore specific players entirely.
 - **Nether mats toggle** — exclude recipes that require Nether materials (e.g. Enchant Boots - Surefooted).
 - **Delay options** — add a delay before whispering/inviting so you don't look like a bot.
-- **Session earnings tracker** — `/e summary` prints total gold earned from trades this session.
-- **In-game options panel** — `/e config` for a full settings UI.
+- **Session earnings tracker** — `/ec summary` prints total gold earned from trades this session.
+- **In-game options panel** — `/ec config` for a full settings UI.
 
 ## Installation
 
@@ -44,21 +44,21 @@
 |---|---|
 | `/e scan` | Scan and store your known enchant recipes (run once, and again after learning new recipes) |
 | `/e start` | Start monitoring chat for requests |
-| `/e stop` / `/e pause` | Pause the addon |
-| `/e config` / `/e setup` / `/e options` | Open the settings panel |
+| `/e stop` / `/ec pause` | Pause the addon |
+| `/e config` / `/ec setup` / `/e options` | Open the settings panel |
 | `/e debug` | Toggle debug messages |
 | `/e summary` | Show gold earned this session |
-| `/e reset` / `/e default` | Reset all settings to default |
-| `/e about` / `/e usage` | Quick usage reminder |
+| `/e reset` / `/ec default` | Reset all settings to default |
+| `/e about` / `/ec usage` | Quick usage reminder |
 
 `/ec` and `/enchanter` also work as aliases for `/e`.
 
 ## Getting Started
 
 1. Learn Enchanting and log in on your enchanter.
-2. Run `/e scan` to store your known recipes.
-3. Run `/e start` to begin watching chat.
-4. (Optional) Run `/e config` to tweak tags, blacklist, auto-invite, and delays.
+2. Run `/ec scan` to store your known recipes.
+3. Run `/ec start` to begin watching chat.
+4. (Optional) Run `/ec config` to tweak tags, blacklist, auto-invite, and delays.
 
 ## Compatibility
 
