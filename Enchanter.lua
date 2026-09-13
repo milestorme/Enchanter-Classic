@@ -95,7 +95,7 @@ function EC.Init()
 				.. "|cFFC0C0C0" .. silver .. "s|r "
 				.. "|cFFB87333" .. copper .. "c|r")
 		end},
-		{{"about", "usage"},"You need to first run /e scan this will store your known recipes and will be parsing chat for them (only need to do it 1 time or if you learned new recipes) after run /e start to start looking for requests"},
+		{{"about", "usage"},"You need to first run /ec scan this will store your known recipes and will be parsing chat for them (only need to do it 1 time or if you learned new recipes) after run /ec start to start looking for requests"},
 	})
 
 	EC.OptionsInit()
