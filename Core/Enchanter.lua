@@ -181,13 +181,14 @@ local function ScanCraftLinksOnce(verbose)
 				link = GetClickableCraftLink(i)
 			end
 			EC.DBChar.RecipeList[craftName] = tag
+			-- Keep reagent text even when a clickable enchant link is available.
+			-- The hyperlink tooltip is useful locally, but the customer needs the mats in the whisper.
+			EC.DBChar.RecipeMats[craftName] = BuildReagentText(i)
 			if link then
 				EC.DBChar.RecipeLinks[craftName] = link
-				EC.DBChar.RecipeMats[craftName] = nil
 			else
 				stillPending = true
 				table.insert(linkless, craftName)
-				EC.DBChar.RecipeMats[craftName] = BuildReagentText(i)
 			end
 		end
 	end
@@ -442,6 +443,34 @@ local function TrimText(value)
 	return value
 end
 
+local RECIPE_MATCH_IGNORED_WORDS = {
+	["to"] = true,
+	["on"] = true,
+}
+
+local RECIPE_MATCH_WORD_ALIASES = {
+	["bracers"] = "bracer",
+	["chests"] = "chest",
+	["cloaks"] = "cloak",
+	["shields"] = "shield",
+	["weapons"] = "weapon",
+}
+
+local function NormalizeRecipeMatchText(value)
+	if type(value) ~= "string" then return "" end
+
+	local normalized = value:lower():gsub("[^%w]+", " ")
+	local words = {}
+
+	for word in normalized:gmatch("%S+") do
+		if not RECIPE_MATCH_IGNORED_WORDS[word] then
+			table.insert(words, RECIPE_MATCH_WORD_ALIASES[word] or word)
+		end
+	end
+
+	return table.concat(words, " ")
+end
+
 function EC.InitPatterns()
 	-- Rebuild from scratch. Store normalized *literal* strings rather than Lua
 	-- patterns so custom text containing %, [, -, etc. can never break matching.
@@ -465,12 +494,14 @@ function EC.InitPatterns()
 			for _, tag in pairs(tags) do
 				tag = TrimText(tag)
 				if tag then
-					tag = tag:lower()
-					if not EC.RecipeTagsMap[tag] then
-						EC.RecipeTagsMap[tag] = {}
-						table.insert(EC.RecipeTagList, tag)
+					tag = NormalizeRecipeMatchText(tag)
+					if tag ~= "" then
+						if not EC.RecipeTagsMap[tag] then
+							EC.RecipeTagsMap[tag] = {}
+							table.insert(EC.RecipeTagList, tag)
+						end
+						table.insert(EC.RecipeTagsMap[tag], recipe)
 					end
-					table.insert(EC.RecipeTagsMap[tag], recipe)
 				end
 			end
 		end
@@ -564,29 +595,29 @@ end
 
 -- Sends a msg with the enchanting links that enchanter is capable of doing
 function EC.SendMsg(name)
-		if EC.LfRecipeList[name] ~= nil then
-			local msg = EC.DB.MsgPrefix
-			for k, _ in pairs(EC.LfRecipeList[name]) do
-				-- Fall back to name + plain-text materials if the link wasn't
-				-- cached (e.g. scanned before the craft window fully loaded,
-				-- or a recipe whose formula link never resolves), or just the
-				-- plain name if we couldn't get materials either.
-				if EC.DBChar.RecipeLinks[k] then
-					msg = msg .. EC.DBChar.RecipeLinks[k]
-				elseif EC.DBChar.RecipeMats and EC.DBChar.RecipeMats[k] then
-					msg = msg .. k .. " (mats: " .. EC.DBChar.RecipeMats[k] .. ")"
-				else
-					msg = msg .. k
-				end
-			end
-			if EC.DBChar.Debug == true then
-				print("Debug mode: would whisper to " .. name .. ": " .. msg)
-			else
-				SendWhisper(msg, name)
-				--print("Debug mode: would whisper to " .. name .. ": " .. msg)
-			end
-			EC.LfRecipeList[name] = nil -- Clearing it so it doesn't growing larger unnecessarily 
+	if EC.LfRecipeList[name] == nil then
+		return
+	end
+
+	for recipeName, _ in pairs(EC.LfRecipeList[name]) do
+		local recipeDisplay = EC.DBChar.RecipeLinks[recipeName] or recipeName
+		local mats = EC.DBChar.RecipeMats and EC.DBChar.RecipeMats[recipeName]
+		local msg = EC.DB.MsgPrefix .. recipeDisplay
+
+		if mats and mats ~= "" then
+			msg = msg .. " - Mats: " .. mats
+		else
+			msg = msg .. " - Mats unavailable; please ask me to rescan."
 		end
+
+		if EC.DBChar.Debug == true then
+			print("Debug mode: would whisper to " .. name .. ": " .. msg)
+		else
+			SendWhisper(msg, name)
+		end
+	end
+
+	EC.LfRecipeList[name] = nil
 end
 
 -- For a message it will attempt to filter the request based on any of the words in EC.PrefixTags
@@ -614,10 +645,11 @@ function EC.ParseMessage(msg, name)
 
 	if isRequestValid == false then return end
 	local shouldInvite = false
+	local recipeMatchText = NormalizeRecipeMatchText(msgParse)
 	-- use precomputed tag list/map for faster lookup
 	-- iterate over every known tag rather than scanning each recipe
 	for _, tag in ipairs(EC.RecipeTagList) do
-		if ContainsLiteralTag(msgParse, tag) then
+		if ContainsLiteralTag(recipeMatchText, tag) then
 			local recipes = EC.RecipeTagsMap[tag]
 			if recipes then
 				if not EC.LfRecipeList[name] then EC.LfRecipeList[name] = {} end
