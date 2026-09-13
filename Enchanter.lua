@@ -17,24 +17,47 @@ EC.RecipeTagsMap = {}
 EC.RecipeTagList = {}
 -- Scans the users known recipes and stores them
 -- Additionally it also stores the recipes clickable link, that will be used when messaging the user (for those people asks what are the mats?)
-function EC.GetItems()
-	EC.DBChar.RecipeList = {}
-	EC.DBChar.RecipeLinks = {}
+-- NOTE: GetCraftRecipeLink() can return nil for a recipe if the client hasn't
+-- finished loading that recipe's link data yet (common for recipes you
+-- haven't recently viewed). We retry a few times with a short delay so we
+-- don't end up storing a nil link, which would later crash SendMsg().
+local function ScanCraftLinks(attemptsLeft)
+	attemptsLeft = attemptsLeft or 5
+	local sawMissingLink = false
 
-	CastSpellByName("Enchanting")
 	for i = 1, GetNumCrafts(), 1 do
-        local craftName, _, craftType, numAvailable = GetCraftInfo(i);
-		if EC.RecipeTags["enGB"][craftName] ~= nil then 
-			EC.DBChar.RecipeLinks[craftName] = GetCraftRecipeLink(i)
-			EC.DBChar.RecipeList[craftName] = EC.RecipeTags["enGB"][craftName]
+		local craftName = GetCraftInfo(i)
+		if EC.RecipeTags["enGB"][craftName] ~= nil then
+			local link = GetCraftRecipeLink(i)
+			if link then
+				EC.DBChar.RecipeLinks[craftName] = link
+				EC.DBChar.RecipeList[craftName] = EC.RecipeTags["enGB"][craftName]
+			else
+				sawMissingLink = true
+			end
 		end
-    end
+	end
+
+	if sawMissingLink and attemptsLeft > 0 then
+		C_Timer.After(0.5, function() ScanCraftLinks(attemptsLeft - 1) end)
+	elseif sawMissingLink then
+		print("|cFFFF1C1C Enchanter:|r some recipe links could not be loaded. Open your Enchanting window and run /ec scan again.")
+	end
 
 	if EC.DB.NetherRecipes then
 		for _, v in pairs(EC.RecipesWithNether) do
 			EC.DBChar.RecipeList[v] = nil
 		end
 	end
+end
+
+function EC.GetItems()
+	EC.DBChar.RecipeList = {}
+	EC.DBChar.RecipeLinks = {}
+
+	CastSpellByName("Enchanting")
+	-- Give the craft window a moment to actually populate before reading links
+	C_Timer.After(0.3, function() ScanCraftLinks() end)
 end
 
 function EC.Init()
@@ -95,7 +118,7 @@ function EC.Init()
 				.. "|cFFC0C0C0" .. silver .. "s|r "
 				.. "|cFFB87333" .. copper .. "c|r")
 		end},
-		{{"about", "usage"},"You need to first run /ec scan this will store your known recipes and will be parsing chat for them (only need to do it 1 time or if you learned new recipes) after run /ec start to start looking for requests"},
+		{{"about", "usage"},"You need to first run /ec scan this will store your known recipes and will be parsing chat for them (only need to do it 1 time or if you learned new recipes) after run /e start to start looking for requests"},
 	})
 
 	EC.OptionsInit()
@@ -134,8 +157,10 @@ end
 function EC.SendMsg(name)
 		if EC.LfRecipeList[name] ~= nil then
 			local msg = EC.DB.MsgPrefix
-			for k, _ in pairs(EC.LfRecipeList[name]) do 
-				msg = msg .. EC.DBChar.RecipeLinks[k]
+			for k, _ in pairs(EC.LfRecipeList[name]) do
+				-- Fall back to the plain recipe name if the link wasn't cached
+				-- (e.g. scanned before the craft window fully loaded)
+				msg = msg .. (EC.DBChar.RecipeLinks[k] or k)
 			end
 			if EC.DBChar.Debug == true then
 				print("Debug mode: would whisper to " .. name .. ": " .. msg)
