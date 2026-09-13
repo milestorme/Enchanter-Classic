@@ -143,18 +143,40 @@ local function TryForceCraftSelect(index)
 	end
 end
 
+local function IsClickableEnchantLink(link)
+	-- A real clickable enchant/formula link contains an enchant hyperlink payload, e.g.
+	-- |cffffffff|Henchant:20024|h[Enchant Boots - Spirit]|h|r
+	return type(link) == "string" and link:find("|Henchant:", 1, true) ~= nil and link:find("|h", 1, true) ~= nil
+end
+
+local function GetClickableCraftLink(index)
+	-- Classic Era exposes both APIs. GetCraftRecipeLink() is the obvious choice,
+	-- but on some 1.15.x clients it can return nil while GetCraftItemLink() still
+	-- returns the same clickable enchantLink. Only accept an actual enchant hyperlink.
+	local link
+	if type(GetCraftRecipeLink) == "function" then
+		local ok, value = pcall(GetCraftRecipeLink, index)
+		if ok and IsClickableEnchantLink(value) then link = value end
+	end
+	if not link and type(GetCraftItemLink) == "function" then
+		local ok, value = pcall(GetCraftItemLink, index)
+		if ok and IsClickableEnchantLink(value) then link = value end
+	end
+	return link
+end
+
 local function ScanCraftLinksOnce(verbose)
 	local stillPending = false -- recipes that might just need more time
-	local linkless = {}        -- recipes recorded, but with no link (ever)
+	local linkless = {}        -- recipes for which neither Classic API produced a real enchant hyperlink
 
 	for i = 1, GetNumCrafts(), 1 do
 		local craftName = GetCraftInfo(i)
 		local tag = EC.RecipeTags["enGB"][craftName]
 		if tag ~= nil then
-			local link = GetCraftRecipeLink(i)
+			local link = GetClickableCraftLink(i)
 			if not link then
 				TryForceCraftSelect(i)
-				link = GetCraftRecipeLink(i)
+				link = GetClickableCraftLink(i)
 			end
 			EC.DBChar.RecipeList[craftName] = tag
 			if link then
@@ -193,10 +215,46 @@ local function FinishScan(linkless)
 		EC.PreScanSelection = nil
 	end
 
-	print("Scan Completed")
-	if linkless and #linkless > 0 then
-		print("|cFFFFD100 Enchanter:|r note: " .. #linkless .. " recipe(s) have no clickable formula link (will still work, just shown as plain text when whispering mats): " .. table.concat(linkless, ", "))
+	-- Summarise the scan instead of dumping every recipe/linkless recipe into chat.
+	local totalCount, newCount, removedCount = 0, 0, 0
+	for recipe in pairs(EC.DBChar.RecipeList) do
+		totalCount = totalCount + 1
+		if not EC.PreScanRecipeList or not EC.PreScanRecipeList[recipe] then
+			newCount = newCount + 1
+		end
 	end
+	if EC.PreScanRecipeList then
+		for recipe in pairs(EC.PreScanRecipeList) do
+			if not EC.DBChar.RecipeList[recipe] then
+				removedCount = removedCount + 1
+			end
+		end
+	end
+
+	-- Make newly learned enchants available to chat matching immediately.
+	if EC.Initalized and EC.InitPatterns then
+		EC.InitPatterns()
+	end
+
+	local summary = string.format("|cFFFFD100Enchanter:|r Scan complete - %d enchant(s) found, %d new", totalCount, newCount)
+	if removedCount > 0 then
+		summary = summary .. string.format(", %d removed", removedCount)
+	end
+	EC.LastLinklessRecipes = linkless or {}
+	if #EC.LastLinklessRecipes > 0 then
+		summary = summary .. string.format(", %d without clickable recipe link(s)", #EC.LastLinklessRecipes)
+	end
+	print(summary .. ".")
+
+	-- Keep the normal scan compact. If only a few truly lack a link, show them
+	-- immediately; for a larger list /ec links can be used on demand.
+	if #EC.LastLinklessRecipes > 0 and #EC.LastLinklessRecipes <= 8 then
+		print("|cFFFFD100Enchanter:|r No clickable recipe link: " .. table.concat(EC.LastLinklessRecipes, ", "))
+	elseif #EC.LastLinklessRecipes > 8 then
+		print("|cFFFFD100Enchanter:|r Use /ec links to list the affected enchants.")
+	end
+
+	EC.PreScanRecipeList = nil
 end
 
 local function PollScan(attemptsLeft)
@@ -240,6 +298,12 @@ local function Event_GET_ITEM_INFO_RECEIVED()
 end
 
 function EC.GetItems()
+	-- Snapshot the previous scan so the completion message can report genuinely new enchants.
+	EC.PreScanRecipeList = {}
+	for recipe in pairs(EC.DBChar.RecipeList or {}) do
+		EC.PreScanRecipeList[recipe] = true
+	end
+
 	EC.DBChar.RecipeList = {}
 	EC.DBChar.RecipeLinks = {}
 	EC.DBChar.RecipeMats = {}
@@ -323,6 +387,17 @@ function EC.Init()
 		{"history","Shows previous earnings sessions. Optional: /ec history 20",function(msg)
 			PrintEarningsHistory(msg)
 		end},
+		{"links","Lists enchants from the last scan that do not have a real clickable recipe link",function()
+			local missing = EC.LastLinklessRecipes or {}
+			if #missing == 0 then
+				print("|cFFFFD100Enchanter:|r Last scan found no enchants missing a clickable recipe link.")
+			else
+				print(string.format("|cFFFFD100Enchanter:|r %d enchant(s) without a clickable recipe link:", #missing))
+				for i = 1, #missing do
+					print("  - " .. missing[i])
+				end
+			end
+		end},
 		{{"about", "usage"},"You need to first run /ec scan this will store your known recipes and will be parsing chat for them (only need to do it 1 time or if you learned new recipes) after run /e start to start looking for requests"},
 	})
 
@@ -340,22 +415,49 @@ function EC.Init()
 	print("|cFFFF1C1C Loaded: " .. (safeMeta("Title") or TOCNAME) .. " " .. (safeMeta("Version") or "") .. " by " .. (safeMeta("Author") or ""))
 end
 
-function EC.InitPatterns() 
-	for _, v in pairs(EC.PrefixTags) do 
-		table.insert(EC.PrefixTagsCompiled, "%f[%w_]" .. v .. "%f[^%w_]")
-	end
+local function TrimText(value)
+	if type(value) ~= "string" then return nil end
+	value = value:match("^%s*(.-)%s*$")
+	if not value or value == "" then return nil end
+	return value
+end
 
-	for _, v in pairs (EC.BlackList) do 
-		table.insert(EC.BlacklistCompiled, "%f[%w_]" .. v .. "%f[^%w_]")
-	end
+function EC.InitPatterns()
+	-- Rebuild from scratch.  InitPatterns can be called again after a rescan/options
+	-- change, so retaining old entries can otherwise leave stale/duplicate aliases.
+	wipe(EC.PrefixTagsCompiled)
+	wipe(EC.BlacklistCompiled)
+	wipe(EC.RecipeTagsMap)
+	wipe(EC.RecipeTagList)
 
-	for k, v in pairs(EC.DBChar.RecipeList) do
-		for k2, v2 in pairs(v) do
-			EC.RecipeTagsMap [v2] = k
-			table.insert(EC.RecipeTagList, v2)
+	for _, v in pairs(EC.PrefixTags) do
+		v = TrimText(v)
+		if v then
+			v = v:lower()
+			table.insert(EC.PrefixTagsCompiled, "%f[%w_]" .. v .. "%f[^%w_]")
 		end
 	end
-	
+
+	for _, v in pairs(EC.BlackList) do
+		v = TrimText(v)
+		if v then
+			v = v:lower()
+			table.insert(EC.BlacklistCompiled, "%f[%w_]" .. v .. "%f[^%w_]")
+		end
+	end
+
+	for recipe, tags in pairs(EC.DBChar.RecipeList) do
+		if type(tags) == "table" then
+			for _, tag in pairs(tags) do
+				tag = TrimText(tag)
+				if tag then
+					tag = tag:lower()
+					EC.RecipeTagsMap[tag] = recipe
+					table.insert(EC.RecipeTagList, tag)
+				end
+			end
+		end
+	end
 end
 
 -- Sends a msg with the enchanting links that enchanter is capable of doing
@@ -492,13 +594,45 @@ local function Event_TRADE_CLOSED()
 	end
 end
 
--- NOTE: the old Event_CHAT_MSG_CHANNEL function is no longer used,
--- but it's left here in case something else referenced it; the chat
--- events are now handled via the filter above.
-local function Event_CHAT_MSG_CHANNEL(msg,name,_3,_4,_5,_6,zoneChannelID,channelID,channel,_10,_11,guid)
-	-- kept for compatibility; no registration occurs
-	if not EC.Initalized or (zoneChannelID ~= 0 and zoneChannelID ~= 1 and zoneChannelID ~= 2) then return end
+-- Parse chat from ChatFrame message filters, NOT from the raw CHAT_MSG_*
+-- events.  Raw events are delivered even for messages Blizzard later hides
+-- (spam/filtering), which caused invisible messages to trigger whispers and
+-- party invites.  A ChatFrame filter only sees messages as they pass through
+-- the normal chat display pipeline.
+local SeenChatLineIDs = {}
+local LastSeenCleanup = 0
+
+local function WasChatLineHandled(lineID)
+	if not lineID then return false end
+	if SeenChatLineIDs[lineID] then return true end
+	SeenChatLineIDs[lineID] = GetTime()
+
+	local now = GetTime()
+	if now - LastSeenCleanup > 60 then
+		LastSeenCleanup = now
+		for id, stamp in pairs(SeenChatLineIDs) do
+			if now - stamp > 120 then SeenChatLineIDs[id] = nil end
+		end
+	end
+	return false
+end
+
+local function EnchanterChatFilter(self, event, msg, name, languageName, channelName,
+	playerName2, specialFlags, zoneChannelID, channelIndex, channelBaseName,
+	unused, lineID, guid, ...)
+	if not EC.Initalized or EC.DBChar.Stop == true then return false end
+
+	-- For numbered channels keep the original scope: General/Trade/local
+	-- channel IDs plus custom channels (0). Say/Yell do not use zoneChannelID.
+	if event == "CHAT_MSG_CHANNEL" and zoneChannelID ~= 0 and zoneChannelID ~= 1 and zoneChannelID ~= 2 then
+		return false
+	end
+
+	-- The same line can be routed to more than one chat frame. Parse it once.
+	if WasChatLineHandled(lineID) then return false end
+
 	EC.ParseMessage(msg, name)
+	return false -- never hide or alter the player's chat message
 end
 
 
@@ -516,9 +650,14 @@ end
 
 function EC.OnLoad()
     EC.Tool.RegisterEvent("ADDON_LOADED",Event_ADDON_LOADED)
-	EC.Tool.RegisterEvent("CHAT_MSG_CHANNEL",Event_CHAT_MSG_CHANNEL)
-	EC.Tool.RegisterEvent("CHAT_MSG_SAY",Event_CHAT_MSG_CHANNEL)
-	EC.Tool.RegisterEvent("CHAT_MSG_YELL",Event_CHAT_MSG_CHANNEL)
+	-- Do not register raw CHAT_MSG_* events here. See EnchanterChatFilter above.
+	if ChatFrame_AddMessageEventFilter then
+		ChatFrame_AddMessageEventFilter("CHAT_MSG_CHANNEL", EnchanterChatFilter)
+		ChatFrame_AddMessageEventFilter("CHAT_MSG_SAY", EnchanterChatFilter)
+		ChatFrame_AddMessageEventFilter("CHAT_MSG_YELL", EnchanterChatFilter)
+	else
+		print("|cFFFF1C1CEnchanter:|r Chat filtering API unavailable; automatic chat matching disabled for safety.")
+	end
 	EC.Tool.RegisterEvent("TRADE_SHOW",Event_TRADE_SHOW)
 	EC.Tool.RegisterEvent("TRADE_CLOSED",Event_TRADE_CLOSED)
 	EC.Tool.RegisterEvent("PLAYER_LOGOUT",Event_PLAYER_LOGOUT)

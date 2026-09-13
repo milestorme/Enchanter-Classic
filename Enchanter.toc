@@ -1,7 +1,7 @@
 ## Interface: 11509
 ## Title: Enchanter
 ## Notes: Helps enchanters get connected with those looking for enchants
-## Version: 1.6.3
+## Version: 1.6.4
 ## Author: Vyscî-Whitemane
 ## DefaultState: enabled
 ## SavedVariables: EnchanterDB
