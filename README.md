@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="art/enchanter_icon.png" width="140" alt="Enchanter icon">
+  <img src="enchanter_icon.png" width="140" alt="Enchanter icon">
 </p>
 
 <h1 align="center">Enchanter</h1>
@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="art/enchanter_banner.png" width="100%" alt="Enchanter banner">
+  <img src="enchanter_banner.png" width="100%" alt="Enchanter banner">
 </p>
 
 ## About
@@ -34,8 +34,8 @@
 
 ## Installation
 
-1. Download the latest release (or clone this repo).
-2. Extract/copy the `Enchanter` folder into your `Interface/AddOns/` directory.
+1. Download this repo (Code → Download ZIP), or clone it.
+2. Rename the extracted folder to `Enchanter` (if it isn't already) and place it inside your `Interface/AddOns/` directory, so the path looks like `Interface/AddOns/Enchanter/Enchanter.toc`.
 3. Restart WoW or `/reload`.
 
 ## Commands
@@ -66,7 +66,7 @@ This fork targets **WoW Classic Era, patch 1.15.9** (`## Interface: 11509`). If 
 
 ## Changelog
 
-See [change_log.txt](Enchanter/change_log.txt) for the full version history.
+See [change_log.txt](change_log.txt) for the full version history.
 
 ## Credits
 
