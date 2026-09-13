@@ -2,12 +2,14 @@ local TOCNAME,EC=...
 Enchanter_Addon=EC
 
 
-EC.Initalized = false
+EC.Initialized = false
 EC.PlayerList = {}
 EC.LfRecipeList = {}
 EC.SessionGold = 0
 EC.SessionTrades = 0
 local preTradeGold = nil
+local tradeBothAccepted = false
+local PLAYER_RESPONSE_COOLDOWN = 60
 
 -- Persistent earnings use aggregate totals plus a fixed-size session history.
 -- We never store one record per trade, keeping SavedVariables small long-term.
@@ -179,14 +181,13 @@ local function ScanCraftLinksOnce(verbose)
 				link = GetClickableCraftLink(i)
 			end
 			EC.DBChar.RecipeList[craftName] = tag
-			-- Always cache reagent text. Clickable recipe links are useful, but the
-			-- customer should not have to open the tooltip just to learn the mats.
-			EC.DBChar.RecipeMats[craftName] = BuildReagentText(i)
 			if link then
 				EC.DBChar.RecipeLinks[craftName] = link
+				EC.DBChar.RecipeMats[craftName] = nil
 			else
 				stillPending = true
 				table.insert(linkless, craftName)
+				EC.DBChar.RecipeMats[craftName] = BuildReagentText(i)
 			end
 		end
 	end
@@ -235,7 +236,7 @@ local function FinishScan(linkless)
 	end
 
 	-- Make newly learned enchants available to chat matching immediately.
-	if EC.Initalized and EC.InitPatterns then
+	if EC.Initialized and EC.InitPatterns then
 		EC.InitPatterns()
 	end
 
@@ -422,7 +423,7 @@ function EC.Init()
 
 	EC.OptionsInit()
 	EC.InitPatterns() 
-	EC.Initalized = true
+	EC.Initialized = true
 
 	local function safeMeta(key)
 		if EC and EC.Metadata and EC.Metadata[key] then return EC.Metadata[key] end
@@ -509,71 +510,90 @@ local function ContainsLiteralTag(text, tag)
 end
 
 
--- Sends a whisper containing every matched enchant plus its required materials.
--- Messages are split when necessary so several requested enchants cannot exceed
--- Classic's chat-message length limit.
-function EC.SendMsg(name)
-	local requested = EC.LfRecipeList[name]
-	if requested == nil then return end
+local function SendWhisper(message, playerName)
+	if type(message) ~= "string" or message == "" then return end
+	if type(playerName) ~= "string" or playerName == "" then return end
 
-	local recipes = {}
-	for recipe in pairs(requested) do
-		table.insert(recipes, recipe)
-	end
-	table.sort(recipes)
-
-	local messages = {}
-	local prefix = EC.DB.MsgPrefix or "I can do "
-	local current = prefix
-	local maxLength = 240
-
-	for _, recipe in ipairs(recipes) do
-		local display = (EC.DBChar.RecipeLinks and EC.DBChar.RecipeLinks[recipe]) or recipe
-		local mats = EC.DBChar.RecipeMats and EC.DBChar.RecipeMats[recipe]
-		local entry = display
-		if mats and mats ~= "" then
-			entry = entry .. " - Mats: " .. mats
-		end
-
-		local separator = (current == prefix) and "" or "; "
-		if #current + #separator + #entry > maxLength and current ~= prefix then
-			table.insert(messages, current)
-			current = prefix .. entry
-		else
-			current = current .. separator .. entry
-		end
-	end
-
-	if current ~= prefix then
-		table.insert(messages, current)
-	end
-
-	if EC.DBChar.Debug == true then
-		for _, msg in ipairs(messages) do
-			print("Debug mode: would whisper to " .. name .. ": " .. msg)
-		end
+	if C_ChatInfo and C_ChatInfo.SendChatMessage then
+		C_ChatInfo.SendChatMessage(message, "WHISPER", nil, playerName)
+	elseif SendChatMessage then
+		SendChatMessage(message, "WHISPER", nil, playerName)
 	else
-		for i, msg in ipairs(messages) do
-			if i == 1 then
-				SendChatMessage(msg, "WHISPER", nil, name)
-			else
-				C_Timer.After((i - 1) * 0.15, function()
-					if EC.Initalized and not EC.DBChar.Stop then
-						SendChatMessage(msg, "WHISPER", nil, name)
-					end
-				end)
-			end
+		print("|cFFFF1C1CEnchanter:|r Unable to send whisper; chat API unavailable.")
+	end
+end
+
+local function NormalizePlayerName(name)
+	if type(name) ~= "string" then return "" end
+	return name:lower()
+end
+
+local function IsBlacklistedPlayer(name)
+	local normalizedName = NormalizePlayerName(name)
+	if normalizedName == "" then return false end
+
+	local baseName = normalizedName:match("^([^%-]+)") or normalizedName
+	for _, blockedName in ipairs(EC.BlacklistCompiled) do
+		if normalizedName == blockedName or baseName == blockedName then
+			return true
 		end
 	end
+	return false
+end
 
-	EC.LfRecipeList[name] = nil
+local function HasRecentResponse(name)
+	local lastResponse = EC.PlayerList[name]
+	if type(lastResponse) ~= "number" then return false end
+
+	if GetTime() - lastResponse >= PLAYER_RESPONSE_COOLDOWN then
+		EC.PlayerList[name] = nil
+		return false
+	end
+	return true
+end
+
+local function MarkPlayerResponded(name)
+	EC.PlayerList[name] = GetTime()
+end
+
+local function NormalizeGenericRequest(value)
+	if type(value) ~= "string" then return "" end
+	return value:lower():gsub("[%s%p]+", "")
+end
+
+
+-- Sends a msg with the enchanting links that enchanter is capable of doing
+function EC.SendMsg(name)
+		if EC.LfRecipeList[name] ~= nil then
+			local msg = EC.DB.MsgPrefix
+			for k, _ in pairs(EC.LfRecipeList[name]) do
+				-- Fall back to name + plain-text materials if the link wasn't
+				-- cached (e.g. scanned before the craft window fully loaded,
+				-- or a recipe whose formula link never resolves), or just the
+				-- plain name if we couldn't get materials either.
+				if EC.DBChar.RecipeLinks[k] then
+					msg = msg .. EC.DBChar.RecipeLinks[k]
+				elseif EC.DBChar.RecipeMats and EC.DBChar.RecipeMats[k] then
+					msg = msg .. k .. " (mats: " .. EC.DBChar.RecipeMats[k] .. ")"
+				else
+					msg = msg .. k
+				end
+			end
+			if EC.DBChar.Debug == true then
+				print("Debug mode: would whisper to " .. name .. ": " .. msg)
+			else
+				SendWhisper(msg, name)
+				--print("Debug mode: would whisper to " .. name .. ": " .. msg)
+			end
+			EC.LfRecipeList[name] = nil -- Clearing it so it doesn't growing larger unnecessarily 
+		end
 end
 
 -- For a message it will attempt to filter the request based on any of the words in EC.PrefixTags
 -- If the message contains any of those words it will then attempt to check if any of the users recipes(tags) are contained in the message
 -- If their is, it will then invite and message the user with a link to all desired recipes that the enchanter is capable of doing
 function EC.ParseMessage(msg, name)
-	if EC.Initalized==false or name==nil or name=="" or msg==nil or msg=="" or string.len(msg)<4 or EC.DBChar.Stop == true then
+	if EC.Initialized==false or name==nil or name=="" or msg==nil or msg=="" or string.len(msg)<4 or EC.DBChar.Stop == true then
 		return
 	end
 	local msgParse = msg:lower()
@@ -585,19 +605,15 @@ function EC.ParseMessage(msg, name)
 		end
 	end
 
-	for _, v in ipairs(EC.BlacklistCompiled) do
-		if ContainsLiteralTag(msgParse, v) then
-			if EC.DBChar.Debug == true then
-				print("Request: " .. msg .. " is being blacklisted due to tag: " .. v)
-			end
-			isRequestValid = false
-			break
+	if IsBlacklistedPlayer(name) then
+		if EC.DBChar.Debug == true then
+			print("Ignoring blacklisted player: " .. name)
 		end
+		return
 	end
 
 	if isRequestValid == false then return end
 	local shouldInvite = false
-	local alreadyInvited = false
 	-- use precomputed tag list/map for faster lookup
 	-- iterate over every known tag rather than scanning each recipe
 	for _, tag in ipairs(EC.RecipeTagList) do
@@ -614,34 +630,34 @@ function EC.ParseMessage(msg, name)
 					EC.LfRecipeList[name][recipe] = tag
 				end
 
-				if alreadyInvited == false and EC.PlayerList[name] == nil and EC.DBChar.Debug ~= true and EC.DB.AutoInvite then
-					local delay = math.max(0, tonumber(EC.DB.InviteTimeDelay) or 0)
-					C_Timer.After(delay, function()
-						-- Re-check settings at execution time so /ec stop or disabling
-						-- Auto Invite during the delay cannot fire a stale invite.
-						if EC.Initalized and not EC.DBChar.Stop and EC.DB.AutoInvite then
-							C_PartyInfo.InviteUnit(name)
-						end
-					end)
-					alreadyInvited = true
-				end
 			end
 		end
 	end
 	
 	if shouldInvite == true then
 		-- This check is in case there is a bug and it wrongly matches we don't continue spamming invite to the same user every time they post
-		if EC.PlayerList[name] == nil then 
+		if not HasRecentResponse(name) then 
 			if EC.DBChar.Debug == true then
 				print("Inviting Player: " .. name .. " for request: " .. msg)
 			end
 
-			EC.PlayerList[name] = 1
+			MarkPlayerResponded(name)
+			local responseStamp = EC.PlayerList[name]
 
 			if EC.DBChar.Debug ~= true then
-				--C_PartyInfo.InviteUnit(name)
-				-- Reason for whispering them before the join the group is in case they are already in a group
+				-- Whisper first so grouped players still receive the response.
 				EC.SendMsg(name)
+				if EC.DB.AutoInvite then
+					local delay = math.max(0, tonumber(EC.DB.InviteTimeDelay) or 0)
+					C_Timer.After(delay, function()
+						if EC.Initialized
+							and not EC.DBChar.Stop
+							and EC.DB.AutoInvite
+							and EC.PlayerList[name] == responseStamp then
+							C_PartyInfo.InviteUnit(name)
+						end
+					end)
+				end
 			else
 				print("Debug mode: suppressed Invite and Whisper to " .. name)
 			end
@@ -649,23 +665,28 @@ function EC.ParseMessage(msg, name)
 			-- Due to the laziness of keeping the whole recipe storage thing, this is an optimization to clear it for users that have already been invited
 			EC.LfRecipeList[name] = nil
 		end
-	elseif EC.DB.WhisperLfRequests and isRequestValid and EC.PlayerList[name] == nil then
+	elseif EC.DB.WhisperLfRequests and isRequestValid and not HasRecentResponse(name) then
 	
 		local isGenericEnchantRequest = false
-		local stripedMsg = string.gsub(msgParse, "%s+", "")
+		local normalizedMsg = NormalizeGenericRequest(msgParse)
 		for _, v in pairs(EC.EnchanterTags) do
-			local stripedTag = string.gsub(v:lower(), "%s+", "")
-			if stripedTag == stripedMsg then
+			local normalizedTag = NormalizeGenericRequest(v)
+			if normalizedTag ~= "" and normalizedMsg:find(normalizedTag, 1, true) then
 				isGenericEnchantRequest = true
+				break
 			end
 		end
 
-		if isGenericEnchantRequest then 
-			EC.PlayerList[name] = 1
+		if isGenericEnchantRequest then
+			MarkPlayerResponded(name)
+			local responseStamp = EC.PlayerList[name]
 			local delay = math.max(0, tonumber(EC.DB.WhisperTimeDelay) or 0)
 			C_Timer.After(delay, function()
-				if EC.Initalized and not EC.DBChar.Stop and EC.DB.WhisperLfRequests then
-					SendChatMessage(EC.DB.LfWhisperMsg, "WHISPER", nil, name)
+				if EC.Initialized
+					and not EC.DBChar.Stop
+					and EC.DB.WhisperLfRequests
+					and EC.PlayerList[name] == responseStamp then
+					SendWhisper(EC.DB.LfWhisperMsg, name)
 				end
 			end)
 		end
@@ -674,14 +695,21 @@ end
 
 local function Event_TRADE_SHOW()
 	preTradeGold = GetMoney()
+	tradeBothAccepted = false
+end
+
+local function Event_TRADE_ACCEPT_UPDATE(playerAccepted, targetAccepted)
+	tradeBothAccepted = playerAccepted == 1 and targetAccepted == 1
 end
 
 local function Event_TRADE_CLOSED()
-	if preTradeGold ~= nil then
-		local snapshot = preTradeGold
-		preTradeGold = nil
-		-- Defer by one frame: PLAYER_MONEY fires after TRADE_CLOSED,
-		-- so GetMoney() here still returns the pre-trade value.
+	local snapshot = preTradeGold
+	local completedTrade = tradeBothAccepted
+	preTradeGold = nil
+	tradeBothAccepted = false
+
+	if snapshot ~= nil and completedTrade then
+		-- Money updates can land just after TRADE_CLOSED.
 		C_Timer.After(1, function()
 			local delta = GetMoney() - snapshot
 			if delta > 0 then
@@ -717,7 +745,7 @@ end
 local function EnchanterChatFilter(self, event, msg, name, languageName, channelName,
 	playerName2, specialFlags, zoneChannelID, channelIndex, channelBaseName,
 	unused, lineID, guid, ...)
-	if not EC.Initalized or EC.DBChar.Stop == true then return false end
+	if not EC.Initialized or EC.DBChar.Stop == true then return false end
 
 	-- For numbered channels keep the original scope: General/Trade/local
 	-- channel IDs plus custom channels (0). Say/Yell do not use zoneChannelID.
@@ -756,6 +784,7 @@ function EC.OnLoad()
 		print("|cFFFF1C1CEnchanter:|r Chat filtering API unavailable; automatic chat matching disabled for safety.")
 	end
 	EC.Tool.RegisterEvent("TRADE_SHOW",Event_TRADE_SHOW)
+	EC.Tool.RegisterEvent("TRADE_ACCEPT_UPDATE",Event_TRADE_ACCEPT_UPDATE)
 	EC.Tool.RegisterEvent("TRADE_CLOSED",Event_TRADE_CLOSED)
 	EC.Tool.RegisterEvent("PLAYER_LOGOUT",Event_PLAYER_LOGOUT)
 	EC.Tool.RegisterEvent("CRAFT_SHOW",Event_CRAFT_SHOW)

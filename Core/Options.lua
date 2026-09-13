@@ -75,21 +75,19 @@ function EC.OptionsUpdate()
 	EC.BlackList = EC.Tool.Split(tostring(EC.DB.Custom.BlackList or ""):lower(), ",")
 	EC.PrefixTags = EC.Tool.Split(tostring(EC.DB.Custom.SearchPrefix or ""):lower(), ",")
 	EC.EnchanterTags = EC.Tool.Split(tostring(EC.DB.Custom.GenericPrefix or ""):lower(), ",")
-	if EC.Initalized and EC.InitPatterns then EC.InitPatterns() end
+	if EC.Initialized and EC.InitPatterns then EC.InitPatterns() end
 end
 
 function EC.OptionsInit ()
 	EC.OptionsBuilder.Init(
-		function() -- ok button			
-			EC.Options.DoOk() 
-			EC.OptionsUpdate()	
+		function() -- ok button
+			EC.Options.DoOk()
 		end,
 		function() -- Chancel/init button
 			EC.Options.DoCancel() 
 		end, 
 		function() -- default button
 			EC.Options.DoDefault()
-			EC.OptionsUpdate()	
 		end
 		)
 	
@@ -162,7 +160,7 @@ function EC.OptionsInit ()
 	MakeEditBoxSaved(EC.DB.Custom, "GenericPrefix", genericSearchWords, "Generic request match phrases", 445, 200, false)
 
 	-- Blacklist
-	MakeEditBoxSaved(EC.DB.Custom, "BlackList", "", "BlackList", 445, 200, false)
+	MakeEditBoxSaved(EC.DB.Custom, "BlackList", "", "Blacklisted player names", 445, 200, false)
 	EC.OptionsBuilder.AddSpacerToPanel()
 
 	-- Recipe Tags
