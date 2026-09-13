@@ -5,10 +5,11 @@
 ## Author: Vyscî-Whitemane
 ## DefaultState: enabled
 ## SavedVariables: EnchanterDB
-## SavedVariablesPerCharacter:EnchanterDBChar
-LibGPIOptions.lua
-LibGPIToolBox.lua
-Tags.lua
-Options.lua
-Enchanter.lua
-Enchanter.xml
+## SavedVariablesPerCharacter: EnchanterDBChar
+
+Libs/LibGPIOptions.lua
+Libs/LibGPIToolBox.lua
+Core/Tags.lua
+Core/Options.lua
+Core/Enchanter.lua
+UI/Enchanter.xml

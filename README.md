@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="enchanter_icon.png" width="140" alt="Enchanter icon">
+  <img src="Media/enchanter_icon.png" width="140" alt="Enchanter icon">
 </p>
 
 <h1 align="center">Enchanter</h1>
@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="enchanter_banner.png" width="100%" alt="Enchanter banner">
+  <img src="Media/enchanter_banner.png" width="100%" alt="Enchanter banner">
 </p>
 
 ## About
