@@ -5,15 +5,23 @@ Enchanter_Addon=EC
 EC.Initialized = false
 EC.PlayerList = {}
 EC.LfRecipeList = {}
+EC.PendingLfWhispers = {}
 EC.SessionGold = 0
 EC.SessionTrades = 0
 local preTradeGold = nil
 local tradeBothAccepted = false
+local targetTradeGold = 0
+local pendingTradeGold = 0
+local tradeRecorded = false
+local tradeEnchantDetected = false
+local tradeEnchantName = nil
+local tradePartnerName = nil
 local PLAYER_RESPONSE_COOLDOWN = 60
 
 -- Persistent earnings use aggregate totals plus a fixed-size session history.
 -- We never store one record per trade, keeping SavedVariables small long-term.
 local MAX_EARNINGS_SESSIONS = 100
+local MAX_ENCHANT_TRADES = 200
 
 local function FormatMoney(copper)
 	copper = math.max(0, math.floor(copper or 0))
@@ -29,6 +37,7 @@ local function EnsureEarningsDB()
 	if type(db.TotalGold) ~= "number" then db.TotalGold = 0 end
 	if type(db.TotalTrades) ~= "number" then db.TotalTrades = 0 end
 	if type(db.Sessions) ~= "table" then db.Sessions = {} end
+	if type(db.TradeHistory) ~= "table" then db.TradeHistory = {} end
 	if type(db.Current) ~= "table" then db.Current = {Gold = 0, Trades = 0, Started = time()} end
 	if type(db.Current.Gold) ~= "number" then db.Current.Gold = 0 end
 	if type(db.Current.Trades) ~= "number" then db.Current.Trades = 0 end
@@ -56,7 +65,7 @@ local function CommitCurrentSession()
 	EC.SessionGold, EC.SessionTrades = 0, 0
 end
 
-local function RecordEarnings(delta)
+local function RecordEarnings(delta, playerName, enchantName)
 	if delta <= 0 then return end
 	local db = EnsureEarningsDB()
 	db.TotalGold = db.TotalGold + delta
@@ -65,6 +74,8 @@ local function RecordEarnings(delta)
 	db.Current.Trades = db.Current.Trades + 1
 	EC.SessionGold = db.Current.Gold
 	EC.SessionTrades = db.Current.Trades
+	table.insert(db.TradeHistory, 1, {Time=time(), Gold=delta, Player=playerName or "Unknown", Enchant=enchantName or "Unknown enchant"})
+	while #db.TradeHistory > MAX_ENCHANT_TRADES do table.remove(db.TradeHistory) end
 end
 
 local function PrintEarningsSummary()
@@ -694,6 +705,63 @@ local function IsGenericEnchantRequest(message)
 	return sawEnchanterWord
 end
 
+local LF_WHISPER_REPLY_TIMEOUT = 180
+
+local function PendingWhisperKey(name)
+	local normalizedName = NormalizePlayerName(name)
+	if normalizedName == "" then return "" end
+	return normalizedName
+end
+
+local function MarkPendingLfWhisper(name)
+	local key = PendingWhisperKey(name)
+	if key == "" then return end
+	EC.PendingLfWhispers[key] = {
+		Name = name,
+		AskedAt = GetTime(),
+	}
+end
+
+local function TakePendingLfWhisper(name)
+	local key = PendingWhisperKey(name)
+	if key == "" then return nil end
+
+	local pending = EC.PendingLfWhispers[key]
+	if not pending then return nil end
+
+	if type(pending.AskedAt) ~= "number" or GetTime() - pending.AskedAt > LF_WHISPER_REPLY_TIMEOUT then
+		EC.PendingLfWhispers[key] = nil
+		return nil
+	end
+
+	-- A pending prompt is single-use: the next whisper is treated as their
+	-- answer to "what do you need?" and cannot repeatedly trigger invites.
+	EC.PendingLfWhispers[key] = nil
+	return pending
+end
+
+local function FindKnownRecipeMatches(message)
+	local matches = {}
+	local matchCount = 0
+	local recipeMatchText = NormalizeRecipeMatchText(message or "")
+
+	for _, tag in ipairs(EC.RecipeTagList) do
+		if ContainsLiteralTag(recipeMatchText, tag) then
+			local recipes = EC.RecipeTagsMap[tag]
+			if recipes then
+				for _, recipe in ipairs(recipes) do
+					if not matches[recipe] then
+						matches[recipe] = tag
+						matchCount = matchCount + 1
+					end
+				end
+			end
+		end
+	end
+
+	return matches, matchCount
+end
+
 
 local function SendRecipeResponse(name, recipeName)
 	local recipeDisplay = EC.DBChar.RecipeLinks[recipeName] or recipeName
@@ -836,35 +904,176 @@ function EC.ParseMessage(msg, name)
 					and EC.DB.WhisperLfRequests
 					and EC.PlayerList[name] == responseStamp then
 					SendWhisper(EC.DB.LfWhisperMsg, name)
+					MarkPendingLfWhisper(name)
 				end
 			end)
 		end
 	end
 end
 
+local function HandleLfWhisperReply(msg, name)
+	if not EC.Initialized or EC.DBChar.Stop == true then return end
+	if type(msg) ~= "string" or msg == "" or type(name) ~= "string" or name == "" then return end
+	if IsBlacklistedPlayer(name) then return end
+
+	local pending = TakePendingLfWhisper(name)
+	if not pending then return end
+
+	local matches, matchCount = FindKnownRecipeMatches(msg)
+	if matchCount == 0 then
+		if EC.DBChar.Debug == true then
+			print("Whisper reply from " .. name .. " did not match a known enchant: " .. msg)
+		else
+			SendWhisper("Sorry, I don't have that enchant.", name)
+		end
+		return
+	end
+
+	EC.LfRecipeList[name] = matches
+
+	if EC.DBChar.Debug == true then
+		print("Whisper reply from " .. name .. " matched " .. matchCount .. " known enchant(s): " .. msg)
+		EC.LfRecipeList[name] = nil
+		return
+	end
+
+	-- The normal recipe response starts with the configured "I can do" prefix
+	-- and includes the recipe link/materials where available.
+	EC.SendMsg(name)
+
+	if EC.DB.AutoInvite then
+		local delay = math.max(0, tonumber(EC.DB.InviteTimeDelay) or 0)
+		C_Timer.After(delay, function()
+			if EC.Initialized and not EC.DBChar.Stop and EC.DB.AutoInvite then
+				C_PartyInfo.InviteUnit(name)
+			end
+		end)
+	end
+end
+
+local function GetTradePartnerName()
+	if type(UnitName) ~= "function" then return nil end
+	local name, realm = UnitName("NPC")
+	if not name then name, realm = UnitName("target") end
+	if name and realm and realm ~= "" then return name .. "-" .. realm end
+	return name
+end
+
+local function CaptureTradeEnchant()
+	if type(GetTradeTargetItemLink) ~= "function" then return end
+	for slot = 1, 7 do
+		local ok, link = pcall(GetTradeTargetItemLink, slot)
+		if ok and type(link) == "string" then
+			local enchantID = tonumber(link:match("|Hitem:%d+:(%d+)"))
+			if enchantID and enchantID > 0 then
+				tradeEnchantDetected = true
+				if not tradeEnchantName then tradeEnchantName = "Enchant ID " .. enchantID end
+				return
+			end
+		end
+	end
+end
+
+local function Event_TRADE_TARGET_ITEM_CHANGED()
+	CaptureTradeEnchant()
+end
+
+local function CaptureTargetTradeMoney()
+	if type(GetTargetTradeMoney) ~= "function" then return end
+	local amount = tonumber(GetTargetTradeMoney()) or 0
+	if amount > targetTradeGold then
+		targetTradeGold = amount
+	end
+end
+
 local function Event_TRADE_SHOW()
 	preTradeGold = GetMoney()
 	tradeBothAccepted = false
+	targetTradeGold = 0
+	pendingTradeGold = 0
+	tradeRecorded = false
+	tradeEnchantDetected = false
+	tradeEnchantName = nil
+	tradePartnerName = GetTradePartnerName()
+	CaptureTargetTradeMoney()
+	CaptureTradeEnchant()
+end
+
+local function Event_TRADE_MONEY_CHANGED()
+	CaptureTargetTradeMoney()
 end
 
 local function Event_TRADE_ACCEPT_UPDATE(playerAccepted, targetAccepted)
-	tradeBothAccepted = playerAccepted == 1 and targetAccepted == 1
+	CaptureTargetTradeMoney()
+	CaptureTradeEnchant()
+	-- Keep this sticky for diagnostics/fallback only. Successful trade
+	-- recording no longer relies on this event being delivered correctly.
+	if playerAccepted == 1 and targetAccepted == 1 then
+		tradeBothAccepted = true
+	end
+end
+
+local function RecordCompletedTrade(amount)
+	amount = tonumber(amount) or 0
+	if tradeRecorded or amount <= 0 then return false end
+	if not tradeEnchantDetected then
+		if EC.DBChar and EC.DBChar.Debug then print("|cFFFFD100Enchanter:|r Ignored completed gold trade: no enchanted trade item detected.") end
+		return false
+	end
+	tradeRecorded = true
+	pendingTradeGold = 0
+	RecordEarnings(amount, tradePartnerName, tradeEnchantName)
+	if EC.DBChar and EC.DBChar.Debug then
+		print("|cFFFFD100Enchanter:|r Recorded completed trade earnings: " .. FormatMoney(amount))
+	end
+	return true
 end
 
 local function Event_TRADE_CLOSED()
+	CaptureTargetTradeMoney()
+	CaptureTradeEnchant()
 	local snapshot = preTradeGold
-	local completedTrade = tradeBothAccepted
 	preTradeGold = nil
 	tradeBothAccepted = false
+	pendingTradeGold = targetTradeGold or 0
+	targetTradeGold = 0
 
-	if snapshot ~= nil and completedTrade then
-		-- Money updates can land just after TRADE_CLOSED.
-		C_Timer.After(1, function()
+	-- TRADE_CLOSED also fires on cancelled trades, so do not commit the
+	-- remembered target offer here. The UI_INFO_MESSAGE handler below waits
+	-- for Blizzard's ERR_TRADE_COMPLETE confirmation. Keep wallet-delta
+	-- checks as a fallback in case that confirmation is unavailable.
+	if snapshot ~= nil then
+		local function CheckTradeGold()
+			if tradeRecorded then return end
 			local delta = GetMoney() - snapshot
 			if delta > 0 then
-				RecordEarnings(delta)
+				RecordCompletedTrade(delta)
 			end
-		end)
+		end
+
+		CheckTradeGold()
+		C_Timer.After(0.2, CheckTradeGold)
+		C_Timer.After(0.75, CheckTradeGold)
+		C_Timer.After(1.5, CheckTradeGold)
+		C_Timer.After(3.0, CheckTradeGold)
+	end
+
+	-- Do not let a cancelled trade's remembered offer leak into a later
+	-- unrelated UI message. A successful completion message is immediate.
+	C_Timer.After(5.0, function()
+		if not tradeRecorded then pendingTradeGold = 0 end
+	end)
+end
+
+local function Event_UI_INFO_MESSAGE(errorType, message)
+	if message == ERR_TRADE_COMPLETE then
+		-- Prefer the amount the customer actually placed into the trade. This
+		-- is available before the wallet itself necessarily refreshes.
+		if pendingTradeGold > 0 then
+			RecordCompletedTrade(pendingTradeGold)
+		elseif targetTradeGold > 0 then
+			RecordCompletedTrade(targetTradeGold)
+		end
 	end
 end
 
@@ -910,6 +1119,14 @@ local function EnchanterChatFilter(self, event, msg, name, languageName, channel
 end
 
 
+local function EnchanterWhisperFilter(self, event, msg, name, ...)
+	-- Unlike public chat parsing, whisper handling is gated by a short-lived
+	-- prompt record, so only someone we just asked "what do you need?" can
+	-- enter this follow-up flow. The whisper is never hidden or modified.
+	HandleLfWhisperReply(msg, name)
+	return false
+end
+
 local function Event_ADDON_LOADED(arg1)
 	if arg1 == TOCNAME then
 		EC.Init()
@@ -929,12 +1146,16 @@ function EC.OnLoad()
 		ChatFrame_AddMessageEventFilter("CHAT_MSG_CHANNEL", EnchanterChatFilter)
 		ChatFrame_AddMessageEventFilter("CHAT_MSG_SAY", EnchanterChatFilter)
 		ChatFrame_AddMessageEventFilter("CHAT_MSG_YELL", EnchanterChatFilter)
+		ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER", EnchanterWhisperFilter)
 	else
 		print("|cFFFF1C1CEnchanter:|r Chat filtering API unavailable; automatic chat matching disabled for safety.")
 	end
 	EC.Tool.RegisterEvent("TRADE_SHOW",Event_TRADE_SHOW)
 	EC.Tool.RegisterEvent("TRADE_ACCEPT_UPDATE",Event_TRADE_ACCEPT_UPDATE)
+	EC.Tool.RegisterEvent("TRADE_MONEY_CHANGED",Event_TRADE_MONEY_CHANGED)
+	EC.Tool.RegisterEvent("TRADE_TARGET_ITEM_CHANGED",Event_TRADE_TARGET_ITEM_CHANGED)
 	EC.Tool.RegisterEvent("TRADE_CLOSED",Event_TRADE_CLOSED)
+	EC.Tool.RegisterEvent("UI_INFO_MESSAGE",Event_UI_INFO_MESSAGE)
 	EC.Tool.RegisterEvent("PLAYER_LOGOUT",Event_PLAYER_LOGOUT)
 	EC.Tool.RegisterEvent("CRAFT_SHOW",Event_CRAFT_SHOW)
 	EC.Tool.RegisterEvent("GET_ITEM_INFO_RECEIVED",Event_GET_ITEM_INFO_RECEIVED)
