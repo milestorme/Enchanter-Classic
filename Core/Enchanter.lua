@@ -6,6 +6,7 @@ EC.Initialized = false
 EC.PlayerList = {}
 EC.LfRecipeList = {}
 EC.PendingLfWhispers = {}
+EC.LfNoMatchCooldowns = {}
 EC.SessionGold = 0
 EC.SessionTrades = 0
 local preTradeGold = nil
@@ -16,7 +17,9 @@ local tradeRecorded = false
 local tradeEnchantDetected = false
 local tradeEnchantName = nil
 local tradePartnerName = nil
+local tradeActive = false
 local PLAYER_RESPONSE_COOLDOWN = 60
+local LF_NO_MATCH_COOLDOWN = 300
 
 -- Persistent earnings use aggregate totals plus a fixed-size session history.
 -- We never store one record per trade, keeping SavedVariables small long-term.
@@ -535,7 +538,13 @@ local RECIPE_MATCH_WORD_ALIASES = {
 local function NormalizeRecipeMatchText(value)
 	if type(value) ~= "string" then return "" end
 
-	local normalized = value:lower():gsub("[^%w]+", " ")
+	-- Players commonly run numbers and stat abbreviations together (100hp,
+	-- 9stam, 7agi, etc.). Split digit/letter boundaries before normalising so
+	-- those forms match aliases such as "100 hp chest" and "9 stam bracer".
+	local normalized = value:lower()
+	normalized = normalized:gsub("(%d)(%a)", "%1 %2")
+	normalized = normalized:gsub("(%a)(%d)", "%1 %2")
+	normalized = normalized:gsub("[^%w]+", " ")
 	local words = {}
 
 	for word in normalized:gmatch("%S+") do
@@ -661,6 +670,26 @@ end
 
 local function MarkPlayerResponded(name)
 	EC.PlayerList[name] = GetTime()
+end
+
+local function HasRecentLfNoMatch(name)
+	local key = NormalizePlayerName(name)
+	if key == "" then return false end
+
+	local lastNoMatch = EC.LfNoMatchCooldowns[key]
+	if type(lastNoMatch) ~= "number" then return false end
+
+	if GetTime() - lastNoMatch >= LF_NO_MATCH_COOLDOWN then
+		EC.LfNoMatchCooldowns[key] = nil
+		return false
+	end
+	return true
+end
+
+local function MarkLfNoMatch(name)
+	local key = NormalizePlayerName(name)
+	if key == "" then return end
+	EC.LfNoMatchCooldowns[key] = GetTime()
 end
 
 local GENERIC_REQUEST_FILLER_WORDS = {
@@ -890,6 +919,16 @@ function EC.ParseMessage(msg, name)
 	
 		local isGenericEnchantRequest = IsGenericEnchantRequest(msgParse)
 
+		-- If we just told this player we do not have their requested enchant,
+		-- suppress repeated generic "LF enchanter" prompts for a while.
+		-- Direct requests for recipes we actually know are still handled above.
+		if isGenericEnchantRequest and HasRecentLfNoMatch(name) then
+			if EC.DBChar.Debug == true then
+				print("Ignoring repeated generic enchant request during no-match cooldown: " .. name)
+			end
+			return
+		end
+
 		if not isGenericEnchantRequest and EC.DBChar.Debug == true then
 			print("Ignoring unknown specific enchant request from " .. name .. ": " .. msg)
 		end
@@ -921,6 +960,7 @@ local function HandleLfWhisperReply(msg, name)
 
 	local matches, matchCount = FindKnownRecipeMatches(msg)
 	if matchCount == 0 then
+		MarkLfNoMatch(name)
 		if EC.DBChar.Debug == true then
 			print("Whisper reply from " .. name .. " did not match a known enchant: " .. msg)
 		else
@@ -960,17 +1000,55 @@ local function GetTradePartnerName()
 end
 
 local function CaptureTradeEnchant()
-	if type(GetTradeTargetItemLink) ~= "function" then return end
-	for slot = 1, 7 do
-		local ok, link = pcall(GetTradeTargetItemLink, slot)
-		if ok and type(link) == "string" then
-			local enchantID = tonumber(link:match("|Hitem:%d+:(%d+)"))
-			if enchantID and enchantID > 0 then
+	-- Classic exposes the enchant currently being applied in the trade window
+	-- as the sixth return from GetTradeTargetItemInfo(). This is more reliable
+	-- than inspecting the target item link, which may not change until later.
+	if type(GetTradeTargetItemInfo) == "function" then
+		for slot = 1, 7 do
+			local ok, _, _, _, _, _, enchant = pcall(GetTradeTargetItemInfo, slot)
+			if ok and type(enchant) == "string" and enchant ~= "" then
 				tradeEnchantDetected = true
-				if not tradeEnchantName then tradeEnchantName = "Enchant ID " .. enchantID end
+				tradeEnchantName = enchant
 				return
 			end
 		end
+	end
+
+	-- Fallback for clients that expose the applied permanent enchant in the
+	-- target item link during the trade.
+	if type(GetTradeTargetItemLink) == "function" then
+		for slot = 1, 7 do
+			local ok, link = pcall(GetTradeTargetItemLink, slot)
+			if ok and type(link) == "string" then
+				local enchantID = tonumber(link:match("|Hitem:%d+:(%d+)"))
+				if enchantID and enchantID > 0 then
+					tradeEnchantDetected = true
+					if not tradeEnchantName then tradeEnchantName = "Enchant ID " .. enchantID end
+					return
+				end
+			end
+		end
+	end
+end
+
+local function FindKnownEnchantBySpellID(spellID)
+	spellID = tonumber(spellID)
+	if not spellID then return nil end
+	for recipeName, link in pairs(EC.DBChar.RecipeLinks or {}) do
+		if type(link) == "string" then
+			local recipeSpellID = tonumber(link:match("|Henchant:(%d+)"))
+			if recipeSpellID == spellID then return recipeName end
+		end
+	end
+	return nil
+end
+
+local function Event_UNIT_SPELLCAST_SUCCEEDED(unitTarget, castGUID, spellID)
+	if unitTarget ~= "player" or not tradeActive then return end
+	local recipeName = FindKnownEnchantBySpellID(spellID)
+	if recipeName then
+		tradeEnchantDetected = true
+		tradeEnchantName = recipeName
 	end
 end
 
@@ -995,6 +1073,7 @@ local function Event_TRADE_SHOW()
 	tradeEnchantDetected = false
 	tradeEnchantName = nil
 	tradePartnerName = GetTradePartnerName()
+	tradeActive = true
 	CaptureTargetTradeMoney()
 	CaptureTradeEnchant()
 end
@@ -1032,6 +1111,7 @@ end
 local function Event_TRADE_CLOSED()
 	CaptureTargetTradeMoney()
 	CaptureTradeEnchant()
+	tradeActive = false
 	local snapshot = preTradeGold
 	preTradeGold = nil
 	tradeBothAccepted = false
@@ -1154,6 +1234,7 @@ function EC.OnLoad()
 	EC.Tool.RegisterEvent("TRADE_ACCEPT_UPDATE",Event_TRADE_ACCEPT_UPDATE)
 	EC.Tool.RegisterEvent("TRADE_MONEY_CHANGED",Event_TRADE_MONEY_CHANGED)
 	EC.Tool.RegisterEvent("TRADE_TARGET_ITEM_CHANGED",Event_TRADE_TARGET_ITEM_CHANGED)
+	EC.Tool.RegisterEvent("UNIT_SPELLCAST_SUCCEEDED",Event_UNIT_SPELLCAST_SUCCEEDED)
 	EC.Tool.RegisterEvent("TRADE_CLOSED",Event_TRADE_CLOSED)
 	EC.Tool.RegisterEvent("UI_INFO_MESSAGE",Event_UI_INFO_MESSAGE)
 	EC.Tool.RegisterEvent("PLAYER_LOGOUT",Event_PLAYER_LOGOUT)

@@ -163,10 +163,39 @@ function EC.OptionsInit ()
 	MakeEditBoxSaved(EC.DB.Custom, "BlackList", "", "Blacklisted player names", 445, 200, false)
 	EC.OptionsBuilder.AddSpacerToPanel()
 
-	-- Recipe Tags
-	for k,v in pairs(EC.RecipeTags["enGB"]) do
-		local txt = EC.Tool.Combine(EC.RecipeTags["enGB"][k],",")
-		MakeEditBoxSaved(EC.DB.Custom, k, txt, k, 445, 200, false)
+	-- Recipe Tags - grouped by equipment slot and alphabetized within each group.
+	-- Lua pairs() has no defined order, which made this section appear random.
+	local slotOrder = {"Boots", "Bracer", "Chest", "Cloak", "Gloves", "Shield", "Weapon", "2H Weapon", "Other"}
+	local groupedRecipes = {}
+	for _, slot in ipairs(slotOrder) do groupedRecipes[slot] = {} end
+
+	local function GetRecipeSlot(recipeName)
+		if recipeName:find("^Enchant Boots %- ") then return "Boots" end
+		if recipeName:find("^Enchant Bracer %- ") then return "Bracer" end
+		if recipeName:find("^Enchant Chest %- ") then return "Chest" end
+		if recipeName:find("^Enchant Cloak %- ") then return "Cloak" end
+		if recipeName:find("^Enchant Gloves %- ") then return "Gloves" end
+		if recipeName:find("^Enchant Shield %- ") then return "Shield" end
+		if recipeName:find("^Enchant 2H Weapon %- ") then return "2H Weapon" end
+		if recipeName:find("^Enchant Weapon %- ") then return "Weapon" end
+		return "Other"
+	end
+
+	for recipeName in pairs(EC.RecipeTags["enGB"]) do
+		table.insert(groupedRecipes[GetRecipeSlot(recipeName)], recipeName)
+	end
+
+	for _, slot in ipairs(slotOrder) do
+		local recipes = groupedRecipes[slot]
+		table.sort(recipes, function(a, b) return a:lower() < b:lower() end)
+		if #recipes > 0 then
+			EC.OptionsBuilder.AddSpacerToPanel()
+			EC.OptionsBuilder.AddHeaderToCurrentPanel(slot .. " Enchants")
+			for _, recipeName in ipairs(recipes) do
+				local txt = EC.Tool.Combine(EC.RecipeTags["enGB"][recipeName], ",")
+				MakeEditBoxSaved(EC.DB.Custom, recipeName, txt, recipeName, 345, 300, false)
+			end
+		end
 	end
 
 	EC.OptionsUpdate() 
