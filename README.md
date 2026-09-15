@@ -110,6 +110,3 @@ See [changelog.txt](changelog.txt) for the full version history.
 - **Original Author:** Vyscî-Whitemane — creator of the original Enchanter addon and its core chat parsing/options foundation.
 - The current Classic Era version expands the addon with updated Classic compatibility, smarter matching and aliases, material responses, persistent statistics, trade tracking, the Enchanter Journal, minimap integration, and additional automation/QoL features.
 
-## License
-
-No license was specified by the original author. If you plan to redistribute or modify this addon, please credit **Vyscî-Whitemane** as the original creator.
