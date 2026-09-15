@@ -65,7 +65,7 @@ This fork targets **WoW Classic Era, patch 1.15.9** (`## Interface: 11509`). If 
 
 ## Changelog
 
-See [changelog.txt](changelog.txt) for the full version history.
+See [change_log.txt](change_log.txt) for the full version history.
 
 ## Credits
 

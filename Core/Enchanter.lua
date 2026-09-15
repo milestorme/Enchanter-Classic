@@ -420,6 +420,20 @@ function EC.GetItems()
 	end)
 end
 
+function EC.StartListening(showMessage)
+	EC.DBChar.Stop = false
+	if showMessage ~= false then print("|cFFFFD100Enchanter:|r Started - listening for enchant requests.") end
+end
+
+function EC.StopListening(showMessage)
+	EC.DBChar.Stop = true
+	if showMessage ~= false then print("|cFFFFD100Enchanter:|r Paused - automatic request matching stopped.") end
+end
+
+function EC.IsListening()
+	return EC.DBChar and EC.DBChar.Stop ~= true
+end
+
 function EC.Init()
 
 	-- Initalize options
@@ -445,14 +459,8 @@ function EC.Init()
 		{"scan","MUST BE RAN PRIOR TO /ec start. Scans and stores your enchanting recipes for request matching. NOTE: You need to rerun this when you learn new recipes",function()
 			EC.GetItems()
 			end},
-		{{"stop", "pause"},"Pauses addon",function()
-			EC.DBChar.Stop = true
-			print("Paused")
-		end},
-		{"start","Starts the addon. It will begin parsing chat looking for requests",function()
-			EC.DBChar.Stop = false
-			print("Started...")
-		end},
+		{{"stop", "pause"},"Pauses addon",function() EC.StopListening(true) end},
+		{"start","Starts the addon. It will begin parsing chat looking for requests",function() EC.StartListening(true) end},
 		{{"default", "reset"},"Resets everything to default values",function()
 			EC.Default()
 			EC.UpdateTags()
@@ -493,7 +501,8 @@ function EC.Init()
 	})
 
 	EC.OptionsInit()
-	EC.InitPatterns() 
+	EC.InitPatterns()
+	if EC.InitMinimap then EC.InitMinimap() end
 	EC.Initialized = true
 
 	local function safeMeta(key)

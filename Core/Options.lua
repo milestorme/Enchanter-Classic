@@ -171,23 +171,23 @@ function EC.OptionsInit ()
 	EC.OptionsBuilder.AddSpacerToPanel()
 
 	-- Message String
-	MakeEditBoxSaved(EC.DB, "MsgPrefix", "I can do ", "Message Prefix", 365, 280, false)
+	MakeEditBoxSaved(EC.DB, "MsgPrefix", "I can do ", "Message Prefix", 445, 200, false)
 
 	-- LF Enchanter Msg String
-	MakeEditBoxSaved(EC.DB, "LfWhisperMsg", "What you looking for?", "Generic request whisper message", 365, 280, false)
-	MakeEditBoxSaved(EC.DB.Custom, "ManualRejectPhrases", "sorry i dont have that", "Manual no-enchant phrases (comma separated)", 365, 280, false)
-	MakeEditBoxSaved(EC.DB, "ManualRejectCooldownMinutes", 5, "Manual rejection cooldown (minutes)", 70, 280, true)
+	MakeEditBoxSaved(EC.DB, "LfWhisperMsg", "What you looking for?", "Generic request whisper message", 445, 200, false)
+	MakeEditBoxSaved(EC.DB.Custom, "ManualRejectPhrases", "sorry i dont have that", "Manual no-enchant phrases (comma separated)", 445, 200, false)
+	MakeEditBoxSaved(EC.DB, "ManualRejectCooldownMinutes", 5, "Manual rejection cooldown (minutes)", 70, nil, true)
 	EC.OptionsBuilder.AddTextToCurrentPanel("When you whisper one of these phrases, that player will not receive another automatic LF Enchanter response until this cooldown expires.", 645)
 	EC.OptionsBuilder.AddSpacerToPanel()
 
 	local prefixTags = EC.Tool.Combine(EC.PrefixTags, ",")
-	MakeEditBoxSaved(EC.DB.Custom, "SearchPrefix", prefixTags, "Prefix to search for", 365, 280, false)
+	MakeEditBoxSaved(EC.DB.Custom, "SearchPrefix", prefixTags, "Prefix to search for", 445, 200, false)
 
 	local genericSearchWords = EC.Tool.Combine(EC.EnchanterTags, ",")
-	MakeEditBoxSaved(EC.DB.Custom, "GenericPrefix", genericSearchWords, "Generic request match phrases", 365, 280, false)
+	MakeEditBoxSaved(EC.DB.Custom, "GenericPrefix", genericSearchWords, "Generic request match phrases", 445, 200, false)
 
 	-- Blacklist
-	MakeEditBoxSaved(EC.DB.Custom, "BlackList", "", "Blacklisted player names", 365, 280, false)
+	MakeEditBoxSaved(EC.DB.Custom, "BlackList", "", "Blacklisted player names", 445, 200, false)
 	EC.OptionsBuilder.AddSpacerToPanel()
 
 	-- Recipe Tags - grouped by equipment slot and alphabetized within each group.

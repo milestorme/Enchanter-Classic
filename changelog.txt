@@ -1,3 +1,15 @@
+Enchanter v1.6.7
+----------------
+- Remade the Enchanter icon as a proper WoW TGA texture in Media/.
+- Added the icon to the TOC with IconTexture so WoW uses it as the addon icon.
+- The LibDataBroker/LibDBIcon minimap button now uses the same shared addon icon texture.
+- Added a proper LibDataBroker/LibDBIcon minimap launcher with saved position.
+- Left-click toggles request listening Start/Stop.
+- Shift + Left-click or Middle-click starts a recipe scan.
+- Right-click opens Enchanter options.
+- Added minimap tooltip showing listening state, known enchant count, scan state and controls.
+- Added shared Start/Stop helpers so slash commands and minimap controls use the same state logic.
+
 ## 1.6.6
 
 ### LF Enchanter Improvements
@@ -29,3 +41,7 @@ Removed abandoned/commented-out Options code.
 Cleaned up unused and redundant code discovered during the audit.
 Verified the Classic enchant database for duplicate recipe entries.
 Checked addon structure, scanning, chat matching, whisper/invite handling, trade tracking, history and options logic.
+
+- Fixed minimap launcher visibility by clearing stale hidden state and explicitly showing the LibDBIcon button.
+- Added native WoW AddOn Compartment support using the same Enchanter icon.
+- Added a PLAYER_LOGIN recovery check for minimap initialisation.
