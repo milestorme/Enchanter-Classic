@@ -17,14 +17,16 @@ local tradeRecorded = false
 local tradeEnchantDetected = false
 local tradeEnchantName = nil
 local tradePartnerName = nil
+local tradePartnerClass = nil
 local tradeActive = false
 local tradeSequence = 0
+local tradeBothAccepted = false
 local PLAYER_RESPONSE_COOLDOWN = 60
 
 -- Persistent earnings use aggregate totals plus a fixed-size session history.
 -- We never store one record per trade, keeping SavedVariables small long-term.
 local MAX_EARNINGS_SESSIONS = 100
-local MAX_ENCHANT_TRADES = 200
+local MAX_ENCHANT_TRADES = 1000
 
 local function FormatMoney(copper)
 	copper = math.max(0, math.floor(copper or 0))
@@ -68,8 +70,8 @@ local function CommitCurrentSession()
 	EC.SessionGold, EC.SessionTrades = 0, 0
 end
 
-local function RecordEarnings(delta, playerName, enchantName)
-	if delta <= 0 then return end
+local function RecordEarnings(delta, playerName, enchantName, playerClass)
+	delta = math.max(0, tonumber(delta) or 0)
 	local db = EnsureEarningsDB()
 	db.TotalGold = db.TotalGold + delta
 	db.TotalTrades = db.TotalTrades + 1
@@ -77,8 +79,9 @@ local function RecordEarnings(delta, playerName, enchantName)
 	db.Current.Trades = db.Current.Trades + 1
 	EC.SessionGold = db.Current.Gold
 	EC.SessionTrades = db.Current.Trades
-	table.insert(db.TradeHistory, 1, {Time=time(), Gold=delta, Player=playerName or "Unknown", Enchant=enchantName or "Unknown enchant"})
+	table.insert(db.TradeHistory, 1, {Time=time(), Gold=delta, Player=playerName or "Unknown", Class=playerClass, Enchant=enchantName or "Unknown enchant"})
 	while #db.TradeHistory > MAX_ENCHANT_TRADES do table.remove(db.TradeHistory) end
+	if EC.RefreshJournal then EC.RefreshJournal() end
 end
 
 local function PrintEarningsSummary()
@@ -483,8 +486,8 @@ function EC.Init()
 		{"summary","Shows current session and lifetime earnings",function()
 			PrintEarningsSummary()
 		end},
-		{"history","Shows previous earnings sessions. Optional: /ec history 20",function(msg)
-			PrintEarningsHistory(msg)
+		{"history","Opens the Enchanter trade journal",function()
+			if EC.OpenJournal then EC.OpenJournal() else print("|cFFFF1C1CEnchanter:|r Journal is unavailable.") end
 		end},
 		{"links","Lists enchants from the last scan that do not have a real clickable recipe link",function()
 			local missing = EC.LastLinklessRecipes or {}
@@ -1068,6 +1071,20 @@ local function Event_TRADE_SHOW()
 	tradeEnchantDetected = false
 	tradeEnchantName = nil
 	tradePartnerName = GetTradePartnerName()
+	tradePartnerClass = nil
+	-- During a trade Blizzard exposes the other player through the NPC unit token.
+	-- Save the class token with the journal entry so class colouring still works
+	-- after the player has left or logged out. Fall back to target when needed.
+	if type(UnitClass) == "function" then
+		local _, classToken = UnitClass("NPC")
+		if classToken then
+			tradePartnerClass = classToken
+		elseif UnitExists and UnitExists("target") and UnitName and UnitName("target") == tradePartnerName then
+			local _, targetClass = UnitClass("target")
+			tradePartnerClass = targetClass
+		end
+	end
+	tradeBothAccepted = false
 	tradeActive = true
 	CaptureTargetTradeMoney()
 	CaptureTradeEnchant()
@@ -1080,18 +1097,23 @@ end
 local function Event_TRADE_ACCEPT_UPDATE(playerAccepted, targetAccepted)
 	CaptureTargetTradeMoney()
 	CaptureTradeEnchant()
+	-- Remember that both sides accepted. This gives zero-tip enchant trades a
+	-- reliable completion path even when there is no wallet change to detect.
+	if tonumber(playerAccepted) == 1 and tonumber(targetAccepted) == 1 then
+		tradeBothAccepted = true
+	end
 end
 
 local function RecordCompletedTrade(amount)
 	amount = tonumber(amount) or 0
-	if tradeRecorded or amount <= 0 then return false end
+	if tradeRecorded then return false end
 	if not tradeEnchantDetected then
 		if EC.DBChar and EC.DBChar.Debug then print("|cFFFFD100Enchanter:|r Ignored completed gold trade: no enchanted trade item detected.") end
 		return false
 	end
 	tradeRecorded = true
 	pendingTradeGold = 0
-	RecordEarnings(amount, tradePartnerName, tradeEnchantName)
+	RecordEarnings(amount, tradePartnerName, tradeEnchantName, tradePartnerClass)
 	if EC.DBChar and EC.DBChar.Debug then
 		print("|cFFFFD100Enchanter:|r Recorded completed trade earnings: " .. FormatMoney(amount))
 	end
@@ -1103,6 +1125,8 @@ local function Event_TRADE_CLOSED()
 	CaptureTradeEnchant()
 	tradeActive = false
 	local closedSequence = tradeSequence
+	local completedByAcceptance = tradeBothAccepted
+	tradeBothAccepted = false
 	local snapshot = preTradeGold
 	preTradeGold = nil
 	pendingTradeGold = targetTradeGold or 0
@@ -1129,6 +1153,17 @@ local function Event_TRADE_CLOSED()
 		C_Timer.After(3.0, CheckTradeGold)
 	end
 
+	-- Do not immediately assume an accepted enchant trade was a zero-tip trade.
+	-- WoW can update the player's wallet a little after TRADE_CLOSED, so an early
+	-- 0c fallback can beat the real gold-delta checks. Give every wallet check a
+	-- chance to run first; only then record 0c if no payment was observed.
+	if completedByAcceptance then
+		C_Timer.After(3.25, function()
+			if tradeSequence ~= closedSequence or tradeRecorded then return end
+			RecordCompletedTrade(pendingTradeGold or 0)
+		end)
+	end
+
 	-- Do not let a cancelled trade's remembered offer leak into a later
 	-- unrelated UI message. A successful completion message is immediate.
 	C_Timer.After(5.0, function()
@@ -1144,6 +1179,10 @@ local function Event_UI_INFO_MESSAGE(errorType, message)
 			RecordCompletedTrade(pendingTradeGold)
 		elseif targetTradeGold > 0 then
 			RecordCompletedTrade(targetTradeGold)
+		else
+			-- Do not commit 0c here. ERR_TRADE_COMPLETE can arrive before the
+			-- player's wallet reflects the customer's payment. TRADE_CLOSED has
+			-- already scheduled wallet-delta checks and a delayed zero-tip fallback.
 		end
 	end
 end
@@ -1217,6 +1256,17 @@ local function Event_PLAYER_LOGOUT()
 	CommitCurrentSession()
 end
 
+local loginStatusShown = false
+local function Event_PLAYER_ENTERING_WORLD(isInitialLogin, isReloadingUi)
+	-- PLAYER_ENTERING_WORLD distinguishes a real login from /reload on Classic.
+	-- Only announce once on an actual login, and only while listening is enabled.
+	if loginStatusShown or not isInitialLogin or isReloadingUi then return end
+	loginStatusShown = true
+	if EC.Initialized and EC.IsListening and EC.IsListening() then
+		print("|cFFFFD100Enchanter:|r Enabled and listening for enchanting requests.")
+	end
+end
+
 
 
 function EC.OnLoad()
@@ -1239,6 +1289,7 @@ function EC.OnLoad()
 	EC.Tool.RegisterEvent("TRADE_CLOSED",Event_TRADE_CLOSED)
 	EC.Tool.RegisterEvent("UI_INFO_MESSAGE",Event_UI_INFO_MESSAGE)
 	EC.Tool.RegisterEvent("PLAYER_LOGOUT",Event_PLAYER_LOGOUT)
+	EC.Tool.RegisterEvent("PLAYER_ENTERING_WORLD",Event_PLAYER_ENTERING_WORLD)
 	EC.Tool.RegisterEvent("CRAFT_SHOW",Event_CRAFT_SHOW)
 	EC.Tool.RegisterEvent("GET_ITEM_INFO_RECEIVED",Event_GET_ITEM_INFO_RECEIVED)
 end

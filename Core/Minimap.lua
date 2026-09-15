@@ -43,7 +43,7 @@ function EC.InitMinimap()
             elseif button == "RightButton" then
                 OpenOptions()
             elseif button == "MiddleButton" then
-                Scan()
+                if EC.OpenJournal then EC.OpenJournal() end
             end
         end,
         OnTooltipShow = function(tt)
@@ -60,7 +60,7 @@ function EC.InitMinimap()
             tt:AddLine(" ")
             tt:AddDoubleLine("Left-click", listening and "Stop listening" or "Start listening", 0.3, 1, 0.3, 1, 1, 1)
             tt:AddDoubleLine("Shift + Left-click", "Scan recipes", 0.3, 1, 0.3, 1, 1, 1)
-            tt:AddDoubleLine("Middle-click", "Scan recipes", 0.3, 1, 0.3, 1, 1, 1)
+            tt:AddDoubleLine("Middle-click", "Trade journal", 0.3, 1, 0.3, 1, 1, 1)
             tt:AddDoubleLine("Right-click", "Options", 0.3, 1, 0.3, 1, 1, 1)
             tt:AddLine("Drag to reposition", 0.65, 0.65, 0.65)
         end,
@@ -82,7 +82,7 @@ function Enchanter_OnAddonCompartmentClick(addonName, buttonName)
     elseif buttonName == "RightButton" then
         OpenOptions()
     elseif buttonName == "MiddleButton" then
-        Scan()
+        if EC and EC.OpenJournal then EC.OpenJournal() end
     end
 end
 
@@ -93,7 +93,7 @@ function Enchanter_OnAddonCompartmentEnter(addonName, menuButtonFrame)
     local listening = EC and EC.IsListening and EC.IsListening()
     GameTooltip:AddLine("Status: " .. (listening and "|cFF33FF66Listening|r" or "|cFFFF5555Paused|r"), 1, 1, 1)
     GameTooltip:AddLine("Left-click: Start / stop listening", 0.85, 0.85, 0.85)
-    GameTooltip:AddLine("Middle-click: Scan recipes", 0.85, 0.85, 0.85)
+    GameTooltip:AddLine("Middle-click: Trade journal", 0.85, 0.85, 0.85)
     GameTooltip:AddLine("Right-click: Options", 0.85, 0.85, 0.85)
     GameTooltip:Show()
 end

@@ -1,3 +1,17 @@
+Enchanter v1.6.8
+----------------
+- Fixed tipped enchant trades sometimes being journaled as 0c when the zero-tip fallback ran before WoW updated the player's wallet.
+- Added a login status message when Enchanter is enabled and listening.
+- The status message is only shown on an actual character login, not on /reload.
+- Journal now records each customer's class and displays their name using the standard WoW class colour.
+- Fixed zero-tip completed enchant trades not always appearing in the Journal; completed trades are now logged even when no gold is given.
+- Added the Enchanter Journal: a dedicated trade-history window showing date/time, player, enchant and gold made.
+- /ec history now opens the Journal instead of printing session history to chat.
+- Middle-clicking the minimap button now opens the Journal; recipe scan remains on Shift + Left-click and /ec scan.
+- Expanded rolling enchant trade history from 200 to the latest 1,000 completed trades.
+- Completed enchant trades with no tip are now retained in the Journal as 0c instead of being omitted.
+- Lifetime trade and gold totals remain independent of Journal pruning.
+
 Enchanter v1.6.7
 ----------------
 - Remade the Enchanter icon as a proper WoW TGA texture in Media/.
