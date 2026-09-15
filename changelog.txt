@@ -1,3 +1,14 @@
+Enchanter v1.6.9
+----------------
+- Fixed specific requests for enchants you do not know incorrectly falling through to the generic LF Enchanter whisper.
+- Enchanter now checks the full configured Classic enchant alias list before sending the generic "What enchant you looking for?" response.
+- Specific known enchant + recipe known: normal enchant/material response. Specific known enchant + recipe unknown: no automatic reply. Generic LF Enchanter only: generic prompt.
+-Audited all 131 Classic Era enchant alias entries.
+-Fixed incorrect aliases for Mighty Spirit (+20 Spirit), Mighty Intellect (+22 Intellect), and 2H Weapon – Agility (+25 Agility).
+-Removed previously shipped incorrect numeric aliases from SavedVariables.
+-Preserved existing user-created custom aliases.
+-Checked alias generation for incorrect values, conflicts, and unsafe matches.
+
 Enchanter v1.6.8
 ----------------
 - Fixed tipped enchant trades sometimes being journaled as 0c when the zero-tip fallback ran before WoW updated the player's wallet.
@@ -59,3 +70,11 @@ Checked addon structure, scanning, chat matching, whisper/invite handling, trade
 - Fixed minimap launcher visibility by clearing stale hidden state and explicitly showing the LibDBIcon button.
 - Added native WoW AddOn Compartment support using the same Enchanter icon.
 - Added a PLAYER_LOGIN recovery check for minimap initialisation.
+
+1.6.8 alias audit correction
+- Audited all 131 Classic Era recipe entries and their shipped/generated aliases.
+- Corrected Mighty Spirit numeric aliases to +20 Spirit.
+- Corrected Mighty Intellect numeric aliases to +22 Intellect.
+- Corrected 2H Weapon - Agility numeric aliases to +25 Agility.
+- Added a narrow SavedVariables migration that removes only the bad +9 aliases shipped for those three recipes while preserving user-created aliases.
+- Verified generated aliases are derived only from each recipe's own name/slot and do not invent numeric values.

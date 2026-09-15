@@ -59,10 +59,45 @@ end
 -- Merge newly shipped aliases into SavedVariables without replacing anything the
 -- player has added themselves. This runs on every load, making alias improvements
 -- upgrade-safe across addon versions.
+-- Remove numeric aliases that were shipped incorrectly in earlier 1.6.8 development builds.
+-- This migration is intentionally narrow: it removes only aliases known to be bad,
+-- preserving every other user-created alias.
+local BadShippedAliases = {
+	["Enchant Weapon - Mighty Spirit"] = {
+		["9 spirit weapon"] = true, ["+9 spirit weapon"] = true,
+		["9 spirit wep"] = true, ["+9 spirit wep"] = true,
+	},
+	["Enchant Weapon - Mighty Intellect"] = {
+		["9 intellect weapon"] = true, ["+9 intellect weapon"] = true,
+		["9 int weapon"] = true, ["+9 int weapon"] = true,
+		["9 intellect wep"] = true, ["+9 intellect wep"] = true,
+		["9 int wep"] = true, ["+9 int wep"] = true,
+	},
+	["Enchant 2H Weapon - Agility"] = {
+		["9 agi 2h"] = true, ["+9 agi 2h"] = true,
+		["9 agility 2h"] = true, ["+9 agility 2h"] = true,
+		["9 agi two hand"] = true, ["+9 agi two hand"] = true,
+		["9 agility two hand"] = true, ["+9 agility two hand"] = true,
+	},
+}
+
+local function RemoveBadShippedAliases(recipeName, aliases)
+	local bad = BadShippedAliases[recipeName]
+	if not bad then return aliases end
+	local cleaned = {}
+	for _, alias in ipairs(aliases) do
+		if not bad[alias:lower()] then table.insert(cleaned, alias) end
+	end
+	return cleaned
+end
+
 function EC.MergeDefaultCustomTags()
 	EC.RecipeTags = EC.DefaultRecipeTags
 	for recipeName, defaults in pairs(EC.RecipeTags["enGB"] or {}) do
-		local existing, seen = SplitAliases(EC.DB.Custom[recipeName])
+		local existing = SplitAliases(EC.DB.Custom[recipeName])
+		existing = RemoveBadShippedAliases(recipeName, existing)
+		local seen = {}
+		for _, alias in ipairs(existing) do seen[alias:lower()] = true end
 		for _, alias in ipairs(defaults) do
 			local trimmed = tostring(alias):match("^%s*(.-)%s*$")
 			local key = trimmed:lower()

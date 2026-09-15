@@ -1,7 +1,7 @@
 ## Interface: 11509
 ## Title: Enchanter
 ## Notes: Helps enchanters get connected with those looking for enchants
-## Version: 1.6.8
+## Version: 1.6.9
 ## Author: Milestorme
 ## IconTexture: Interface\AddOns\Enchanter\Media\enchanter_icon
 ## AddonCompartmentFunc: Enchanter_OnAddonCompartmentClick

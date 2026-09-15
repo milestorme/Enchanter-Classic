@@ -114,6 +114,9 @@ EC.PrefixTagsCompiled = {}
 EC.BlacklistCompiled = {}
 EC.RecipeTagsMap = {}
 EC.RecipeTagList = {}
+-- All configured Classic enchant aliases, including recipes this character does not know.
+-- Used only to distinguish a specific enchant request from a generic "LF enchanter" request.
+EC.AllRecipeTagList = {}
 EC.EnchanterTagsCompiled = {}
 -- Scans the users known recipes and stores them
 -- Additionally it also stores the recipes clickable link, that will be used when messaging the user (for those people asks what are the mats?)
@@ -572,6 +575,7 @@ function EC.InitPatterns()
 	wipe(EC.BlacklistCompiled)
 	wipe(EC.RecipeTagsMap)
 	wipe(EC.RecipeTagList)
+	wipe(EC.AllRecipeTagList)
 	wipe(EC.EnchanterTagsCompiled)
 	wipe(EC.ManualRejectPhrasesCompiled)
 
@@ -602,6 +606,30 @@ function EC.InitPatterns()
 			if normalized ~= "" then table.insert(EC.ManualRejectPhrasesCompiled, normalized) end
 		end
 	end
+
+	-- Build a separate alias list from every configured Classic recipe, not just
+	-- recipes known by this character.  Without this, a specific request for an
+	-- unknown enchant (for example +55 healing) can fall through to the generic
+	-- "LF enchanter" response and incorrectly ask the player what they need.
+	local allSeen = {}
+	for recipeName in pairs((EC.DefaultRecipeTags and EC.DefaultRecipeTags.enGB) or {}) do
+		local aliases = EC.DB.Custom and EC.DB.Custom[recipeName]
+		local tags = EC.Tool.Split(tostring(aliases or ""):lower(), ",")
+		for _, tag in pairs(tags) do
+			tag = TrimText(tag)
+			if tag then
+				tag = NormalizeRecipeMatchText(tag)
+				if tag ~= "" and not allSeen[tag] then
+					allSeen[tag] = true
+					table.insert(EC.AllRecipeTagList, tag)
+				end
+			end
+		end
+	end
+	table.sort(EC.AllRecipeTagList, function(a, b)
+		if #a == #b then return a < b end
+		return #a > #b
+	end)
 
 	for recipe, tags in pairs(EC.DBChar.RecipeList or {}) do
 		if type(tags) == "table" then
@@ -736,6 +764,15 @@ local function IsGenericEnchantRequest(message)
 	local normalized = message:lower()
 	for _, phrase in ipairs(EC.EnchanterTagsCompiled or {}) do
 		if ContainsLiteralTag(normalized, phrase) then return true end
+	end
+	return false
+end
+
+local function HasSpecificEnchantAlias(message)
+	local normalized = NormalizeRecipeMatchText(message or "")
+	if normalized == "" then return false end
+	for _, tag in ipairs(EC.AllRecipeTagList or {}) do
+		if ContainsLiteralTag(normalized, tag) then return true end
 	end
 	return false
 end
@@ -925,9 +962,15 @@ function EC.ParseMessage(msg, name)
 			EC.LfRecipeList[name] = nil
 		end
 	elseif EC.DB.WhisperLfRequests and isRequestValid and not HasRecentResponse(name) then
-	
-		if not isGenericEnchantRequest and EC.DBChar.Debug == true then
-			print("Ignoring unknown specific enchant request from " .. name .. ": " .. msg)
+		-- A message can contain both a generic phrase ("LF enchanter") and a
+		-- specific enchant alias. If the specific enchant is not known, do not
+		-- fall back to the generic "what do you need?" whisper.
+		local hasSpecificEnchant = HasSpecificEnchantAlias(msgParse)
+		if hasSpecificEnchant then
+			if EC.DBChar.Debug == true then
+				print("Ignoring specific enchant request for an unknown recipe from " .. name .. ": " .. msg)
+			end
+			return
 		end
 
 		if isGenericEnchantRequest then
