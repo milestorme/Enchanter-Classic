@@ -6,11 +6,11 @@ EC.Initialized = false
 EC.PlayerList = {}
 EC.LfRecipeList = {}
 EC.PendingLfWhispers = {}
-EC.LfNoMatchCooldowns = {}
+EC.ManualRejectCooldowns = {}
+EC.ManualRejectPhrasesCompiled = {}
 EC.SessionGold = 0
 EC.SessionTrades = 0
 local preTradeGold = nil
-local tradeBothAccepted = false
 local targetTradeGold = 0
 local pendingTradeGold = 0
 local tradeRecorded = false
@@ -18,8 +18,8 @@ local tradeEnchantDetected = false
 local tradeEnchantName = nil
 local tradePartnerName = nil
 local tradeActive = false
+local tradeSequence = 0
 local PLAYER_RESPONSE_COOLDOWN = 60
-local LF_NO_MATCH_COOLDOWN = 300
 
 -- Persistent earnings use aggregate totals plus a fixed-size session history.
 -- We never store one record per trade, keeping SavedVariables small long-term.
@@ -107,11 +107,11 @@ end
 EC.EnchanterTags = EC.DefaultEnchanterTags
 EC.PrefixTags = EC.DefaultPrefixTags
 EC.RecipeTags = EC.DefaultRecipeTags
-EC.RecipesWithNether = {"Enchant Boots - Surefooted"}
 EC.PrefixTagsCompiled = {}
 EC.BlacklistCompiled = {}
 EC.RecipeTagsMap = {}
 EC.RecipeTagList = {}
+EC.EnchanterTagsCompiled = {}
 -- Scans the users known recipes and stores them
 -- Additionally it also stores the recipes clickable link, that will be used when messaging the user (for those people asks what are the mats?)
 -- NOTE: GetCraftRecipeLink() can return nil for a recipe if the client hasn't
@@ -278,15 +278,6 @@ end
 local function FinishScan(linkless)
 	if not EC.ScanPending then return end -- already finished
 	EC.ScanPending = false
-
-	if EC.DB.NetherRecipes then
-		for _, v in pairs(EC.RecipesWithNether) do
-			EC.DBChar.RecipeList[v] = nil
-			EC.DBChar.RecipeLinks[v] = nil
-			EC.DBChar.RecipeMats[v] = nil
-			EC.DBChar.RecipeMatsLinks[v] = nil
-		end
-	end
 
 	-- Restore whatever recipe was actually selected before we started
 	-- force-selecting rows to coax their link data loose.
@@ -522,6 +513,12 @@ local function TrimText(value)
 	return value
 end
 
+local function NormalizeManualRejectText(value)
+	if type(value) ~= "string" then return "" end
+	value = value:lower():gsub("[^%w]+", " ")
+	return value:match("^%s*(.-)%s*$") or ""
+end
+
 local RECIPE_MATCH_IGNORED_WORDS = {
 	["to"] = true,
 	["on"] = true,
@@ -563,15 +560,35 @@ function EC.InitPatterns()
 	wipe(EC.BlacklistCompiled)
 	wipe(EC.RecipeTagsMap)
 	wipe(EC.RecipeTagList)
+	wipe(EC.EnchanterTagsCompiled)
+	wipe(EC.ManualRejectPhrasesCompiled)
 
 	for _, v in pairs(EC.PrefixTags or {}) do
 		v = TrimText(v)
 		if v then table.insert(EC.PrefixTagsCompiled, v:lower()) end
 	end
 
+	for _, v in pairs(EC.EnchanterTags or {}) do
+		v = TrimText(v)
+		if v then table.insert(EC.EnchanterTagsCompiled, v:lower()) end
+	end
+
 	for _, v in pairs(EC.BlackList or {}) do
 		v = TrimText(v)
 		if v then table.insert(EC.BlacklistCompiled, v:lower()) end
+	end
+
+	local manualRejectPhrases = EC.ManualRejectPhrases
+	if not manualRejectPhrases then
+		manualRejectPhrases = EC.Tool.Split(tostring(EC.DB.Custom.ManualRejectPhrases or "sorry i dont have that"):lower(), ",")
+		EC.ManualRejectPhrases = manualRejectPhrases
+	end
+	for _, v in pairs(manualRejectPhrases) do
+		v = TrimText(v)
+		if v then
+			local normalized = NormalizeManualRejectText(v)
+			if normalized ~= "" then table.insert(EC.ManualRejectPhrasesCompiled, normalized) end
+		end
 	end
 
 	for recipe, tags in pairs(EC.DBChar.RecipeList or {}) do
@@ -658,6 +675,13 @@ local function IsBlacklistedPlayer(name)
 end
 
 local function HasRecentResponse(name)
+	local key = NormalizePlayerName(name)
+	local rejectUntil = EC.ManualRejectCooldowns[key]
+	if type(rejectUntil) == "number" then
+		if GetTime() < rejectUntil then return true end
+		EC.ManualRejectCooldowns[key] = nil
+	end
+
 	local lastResponse = EC.PlayerList[name]
 	if type(lastResponse) ~= "number" then return false end
 
@@ -672,66 +696,36 @@ local function MarkPlayerResponded(name)
 	EC.PlayerList[name] = GetTime()
 end
 
-local function HasRecentLfNoMatch(name)
-	local key = NormalizePlayerName(name)
-	if key == "" then return false end
-
-	local lastNoMatch = EC.LfNoMatchCooldowns[key]
-	if type(lastNoMatch) ~= "number" then return false end
-
-	if GetTime() - lastNoMatch >= LF_NO_MATCH_COOLDOWN then
-		EC.LfNoMatchCooldowns[key] = nil
-		return false
+local function IsManualRejectPhrase(message)
+	local normalized = NormalizeManualRejectText(message)
+	if normalized == "" then return false end
+	for _, phrase in ipairs(EC.ManualRejectPhrasesCompiled or {}) do
+		if normalized == phrase then return true end
 	end
-	return true
+	return false
 end
 
-local function MarkLfNoMatch(name)
+local function ApplyManualRejectCooldown(name)
 	local key = NormalizePlayerName(name)
 	if key == "" then return end
-	EC.LfNoMatchCooldowns[key] = GetTime()
+	local minutes = tonumber(EC.DB.ManualRejectCooldownMinutes) or 5
+	minutes = math.max(0, minutes)
+	if minutes <= 0 then return end
+	EC.ManualRejectCooldowns[key] = GetTime() + (minutes * 60)
+	-- The pending follow-up is finished once the enchanter manually declines it.
+	EC.PendingLfWhispers[key] = nil
+	if EC.DBChar.Debug == true then
+		print(string.format("Manual rejection cooldown: %s for %.1f minute(s)", name, minutes))
+	end
 end
 
-local GENERIC_REQUEST_FILLER_WORDS = {
-	["a"] = true,
-	["an"] = true,
-	["any"] = true,
-	["anyone"] = true,
-	["available"] = true,
-	["enchant"] = true,
-	["enchanter"] = true,
-	["enchanting"] = true,
-	["for"] = true,
-	["lf"] = true,
-	["looking"] = true,
-	["need"] = true,
-	["needed"] = true,
-	["please"] = true,
-	["pls"] = true,
-	["plz"] = true,
-	["someone"] = true,
-	["want"] = true,
-}
-
 local function IsGenericEnchantRequest(message)
-	if type(message) ~= "string" then
-		return false
+	if type(message) ~= "string" then return false end
+	local normalized = message:lower()
+	for _, phrase in ipairs(EC.EnchanterTagsCompiled or {}) do
+		if ContainsLiteralTag(normalized, phrase) then return true end
 	end
-
-	local normalized = message:lower():gsub("[^%w]+", " ")
-	local sawEnchanterWord = false
-
-	for word in normalized:gmatch("%S+") do
-		if word == "enchanter" or word == "enchanting" or word == "enchant" then
-			sawEnchanterWord = true
-		end
-
-		if not GENERIC_REQUEST_FILLER_WORDS[word] then
-			return false
-		end
-	end
-
-	return sawEnchanterWord
+	return false
 end
 
 local LF_WHISPER_REPLY_TIMEOUT = 180
@@ -846,11 +840,14 @@ function EC.ParseMessage(msg, name)
 		return
 	end
 	local msgParse = msg:lower()
-	local isRequestValid = false
-	for _, v in ipairs(EC.PrefixTagsCompiled) do
-		if ContainsLiteralTag(msgParse, v) then -- prevents LF matching LFW, etc.
-			isRequestValid = true
-			break
+	local isGenericEnchantRequest = IsGenericEnchantRequest(msgParse)
+	local isRequestValid = isGenericEnchantRequest
+	if not isRequestValid then
+		for _, v in ipairs(EC.PrefixTagsCompiled) do
+			if ContainsLiteralTag(msgParse, v) then -- prevents LF matching LFW, etc.
+				isRequestValid = true
+				break
+			end
 		end
 	end
 
@@ -917,18 +914,6 @@ function EC.ParseMessage(msg, name)
 		end
 	elseif EC.DB.WhisperLfRequests and isRequestValid and not HasRecentResponse(name) then
 	
-		local isGenericEnchantRequest = IsGenericEnchantRequest(msgParse)
-
-		-- If we just told this player we do not have their requested enchant,
-		-- suppress repeated generic "LF enchanter" prompts for a while.
-		-- Direct requests for recipes we actually know are still handled above.
-		if isGenericEnchantRequest and HasRecentLfNoMatch(name) then
-			if EC.DBChar.Debug == true then
-				print("Ignoring repeated generic enchant request during no-match cooldown: " .. name)
-			end
-			return
-		end
-
 		if not isGenericEnchantRequest and EC.DBChar.Debug == true then
 			print("Ignoring unknown specific enchant request from " .. name .. ": " .. msg)
 		end
@@ -960,11 +945,12 @@ local function HandleLfWhisperReply(msg, name)
 
 	local matches, matchCount = FindKnownRecipeMatches(msg)
 	if matchCount == 0 then
-		MarkLfNoMatch(name)
+		-- Do not auto-reply when the player's wording does not match a known recipe.
+		-- Enchant names are often abbreviated or misspelled, so leave unmatched
+		-- replies for the enchanter to answer manually instead of falsely saying
+		-- the enchant is unavailable.
 		if EC.DBChar.Debug == true then
-			print("Whisper reply from " .. name .. " did not match a known enchant: " .. msg)
-		else
-			SendWhisper("Sorry, I don't have that enchant.", name)
+			print("Whisper reply from " .. name .. " did not match a known enchant; leaving for manual response: " .. msg)
 		end
 		return
 	end
@@ -1065,8 +1051,8 @@ local function CaptureTargetTradeMoney()
 end
 
 local function Event_TRADE_SHOW()
+	tradeSequence = tradeSequence + 1
 	preTradeGold = GetMoney()
-	tradeBothAccepted = false
 	targetTradeGold = 0
 	pendingTradeGold = 0
 	tradeRecorded = false
@@ -1085,11 +1071,6 @@ end
 local function Event_TRADE_ACCEPT_UPDATE(playerAccepted, targetAccepted)
 	CaptureTargetTradeMoney()
 	CaptureTradeEnchant()
-	-- Keep this sticky for diagnostics/fallback only. Successful trade
-	-- recording no longer relies on this event being delivered correctly.
-	if playerAccepted == 1 and targetAccepted == 1 then
-		tradeBothAccepted = true
-	end
 end
 
 local function RecordCompletedTrade(amount)
@@ -1112,9 +1093,9 @@ local function Event_TRADE_CLOSED()
 	CaptureTargetTradeMoney()
 	CaptureTradeEnchant()
 	tradeActive = false
+	local closedSequence = tradeSequence
 	local snapshot = preTradeGold
 	preTradeGold = nil
-	tradeBothAccepted = false
 	pendingTradeGold = targetTradeGold or 0
 	targetTradeGold = 0
 
@@ -1124,7 +1105,8 @@ local function Event_TRADE_CLOSED()
 	-- checks as a fallback in case that confirmation is unavailable.
 	if snapshot ~= nil then
 		local function CheckTradeGold()
-			if tradeRecorded then return end
+			-- Ignore delayed callbacks from an older trade after a new trade has opened.
+			if tradeSequence ~= closedSequence or tradeRecorded then return end
 			local delta = GetMoney() - snapshot
 			if delta > 0 then
 				RecordCompletedTrade(delta)
@@ -1141,7 +1123,7 @@ local function Event_TRADE_CLOSED()
 	-- Do not let a cancelled trade's remembered offer leak into a later
 	-- unrelated UI message. A successful completion message is immediate.
 	C_Timer.After(5.0, function()
-		if not tradeRecorded then pendingTradeGold = 0 end
+		if tradeSequence == closedSequence and not tradeRecorded then pendingTradeGold = 0 end
 	end)
 end
 
@@ -1207,6 +1189,15 @@ local function EnchanterWhisperFilter(self, event, msg, name, ...)
 	return false
 end
 
+local function EnchanterOutgoingWhisperFilter(self, event, msg, name, ...)
+	-- If the enchanter manually sends one of their configured decline phrases,
+	-- suppress further LF auto-responses to that recipient for the configured time.
+	if EC.Initialized and EC.DBChar.Stop ~= true and IsManualRejectPhrase(msg) then
+		ApplyManualRejectCooldown(name)
+	end
+	return false
+end
+
 local function Event_ADDON_LOADED(arg1)
 	if arg1 == TOCNAME then
 		EC.Init()
@@ -1227,6 +1218,7 @@ function EC.OnLoad()
 		ChatFrame_AddMessageEventFilter("CHAT_MSG_SAY", EnchanterChatFilter)
 		ChatFrame_AddMessageEventFilter("CHAT_MSG_YELL", EnchanterChatFilter)
 		ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER", EnchanterWhisperFilter)
+		ChatFrame_AddMessageEventFilter("CHAT_MSG_WHISPER_INFORM", EnchanterOutgoingWhisperFilter)
 	else
 		print("|cFFFF1C1CEnchanter:|r Chat filtering API unavailable; automatic chat matching disabled for safety.")
 	end

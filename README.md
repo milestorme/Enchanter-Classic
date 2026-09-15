@@ -17,7 +17,6 @@
 **Enchanter** watches general/trade chat for players looking for enchants and automatically whispers them back with a list of the enchants you know how to make — so you can keep questing, farming, or AFK-ing at the auction house without babysitting chat.
 
 - **Interface:** 11509 (WoW Classic Era, patch 1.15.9)
-- **Version:** 1.6.4
 - **Original Author:** Vyscî-Whitemane
 
 ## Features
@@ -66,7 +65,7 @@ This fork targets **WoW Classic Era, patch 1.15.9** (`## Interface: 11509`). If 
 
 ## Changelog
 
-See [change_log.txt](change_log.txt) for the full version history.
+See [changelog.txt](changelog.txt) for the full version history.
 
 ## Credits
 

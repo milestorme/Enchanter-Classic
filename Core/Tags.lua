@@ -149,3 +149,79 @@ EC.DefaultRecipeTags={
 		["Enchant 2H Weapon - Major Intellect"] = "Enchant 2H Weapon - Major Intellect,9 intellect 2h,9 intellect two hand",
 	}),
 }
+
+-- Build a richer set of safe, natural-language aliases for every Classic enchant.
+-- These are generated from the official recipe name so even low-level enchants get
+-- useful forms such as "minor stamina boots", "boots minor stam", "minor stam boot",
+-- "greater str bracers", "spell power wep", etc.  We deliberately keep the slot in
+-- generated aliases to avoid ambiguous matches between enchants sharing the same stat.
+local function ExpandDefaultRecipeAliases()
+	local recipes = EC.DefaultRecipeTags and EC.DefaultRecipeTags.enGB
+	if type(recipes) ~= "table" then return end
+
+	local slotVariants = {
+		["Boots"] = {"boots", "boot"},
+		["Bracer"] = {"bracer", "bracers", "wrist"},
+		["Chest"] = {"chest"},
+		["Cloak"] = {"cloak", "cape"},
+		["Gloves"] = {"gloves", "glove"},
+		["Shield"] = {"shield"},
+		["Weapon"] = {"weapon", "wep"},
+		["2H Weapon"] = {"2h", "2h weapon", "2h wep", "two hand", "two handed"},
+	}
+	local wordAliases = {
+		agility = "agi", stamina = "stam", strength = "str", intellect = "int",
+		resistance = "resist", health = "hp", regeneration = "regen",
+	}
+
+	local function addUnique(list, seen, value)
+		value = tostring(value or ""):lower():match("^%s*(.-)%s*$")
+		if value ~= "" and not seen[value] then
+			seen[value] = true
+			table.insert(list, value)
+		end
+	end
+
+	local function abbreviated(effect)
+		local changed = false
+		local words = {}
+		for word in effect:lower():gmatch("%S+") do
+			local replacement = wordAliases[word]
+			if replacement then changed = true end
+			table.insert(words, replacement or word)
+		end
+		return changed and table.concat(words, " ") or nil
+	end
+
+	for recipeName, aliases in pairs(recipes) do
+		if type(aliases) == "table" then
+			local seen = {}
+			for _, alias in ipairs(aliases) do seen[tostring(alias):lower()] = true end
+
+			local slot, effect = recipeName:match("^Enchant (2H Weapon) %- (.+)$")
+			if not slot then slot, effect = recipeName:match("^Enchant ([^-]+) %- (.+)$") end
+			if slot and effect and slotVariants[slot] then
+				local effects = {effect:lower()}
+				local shortEffect = abbreviated(effect)
+				if shortEffect then table.insert(effects, shortEffect) end
+
+				for _, effectText in ipairs(effects) do
+					for _, slotText in ipairs(slotVariants[slot]) do
+						addUnique(aliases, seen, effectText .. " " .. slotText)
+						addUnique(aliases, seen, slotText .. " " .. effectText)
+					end
+				end
+			end
+
+			-- A leading + is common player shorthand. Keep it visible in Options for
+			-- existing numeric aliases even though the matcher itself ignores punctuation.
+			local snapshot = {}
+			for _, alias in ipairs(aliases) do table.insert(snapshot, alias) end
+			for _, alias in ipairs(snapshot) do
+				if alias:match("^%d+%s") then addUnique(aliases, seen, "+" .. alias) end
+			end
+		end
+	end
+end
+
+ExpandDefaultRecipeAliases()

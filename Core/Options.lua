@@ -36,15 +36,6 @@ if not EC.Options then
 end
 
 function EC.UpdateTags()
-	-- Undecided if I should keep this in or not
-	--[[ 
-		for k, v in pairs(EC.DB.Custom) do 
-		if v == nil or v == "" then
-			local txt = EC.Tool.Combine(EC.RecipeTags["enGB"][k],",")
-			EC.DB.Custom[k] = txt
-		end
-	end
---]]
 	for k, _ in pairs(EC.DBChar.RecipeList) do
 		if EC.DB.Custom[k] ~= nil and EC.DB.Custom[k] ~= "" then
 			EC.DBChar.RecipeList[k] = EC.Tool.Split(EC.DB.Custom[k]:lower(),",")
@@ -52,14 +43,43 @@ function EC.UpdateTags()
 	end
 end
 
-function EC.DefaultCustomTags()
+local function SplitAliases(value)
+	local result, seen = {}, {}
+	for part in tostring(value or ""):gmatch("[^,]+") do
+		local trimmed = part:match("^%s*(.-)%s*$")
+		local key = trimmed:lower()
+		if trimmed ~= "" and not seen[key] then
+			seen[key] = true
+			table.insert(result, trimmed)
+		end
+	end
+	return result, seen
+end
 
+-- Merge newly shipped aliases into SavedVariables without replacing anything the
+-- player has added themselves. This runs on every load, making alias improvements
+-- upgrade-safe across addon versions.
+function EC.MergeDefaultCustomTags()
+	EC.RecipeTags = EC.DefaultRecipeTags
+	for recipeName, defaults in pairs(EC.RecipeTags["enGB"] or {}) do
+		local existing, seen = SplitAliases(EC.DB.Custom[recipeName])
+		for _, alias in ipairs(defaults) do
+			local trimmed = tostring(alias):match("^%s*(.-)%s*$")
+			local key = trimmed:lower()
+			if trimmed ~= "" and not seen[key] then
+				seen[key] = true
+				table.insert(existing, trimmed)
+			end
+		end
+		EC.DB.Custom[recipeName] = table.concat(existing, ",")
+	end
+end
+
+function EC.DefaultCustomTags()
 	EC.RecipeTags = EC.DefaultRecipeTags
 	for k,v in pairs(EC.RecipeTags["enGB"]) do
-		local txt = EC.Tool.Combine(EC.RecipeTags["enGB"][k],",")
-		EC.DB.Custom[k] = txt
+		EC.DB.Custom[k] = EC.Tool.Combine(v,",")
 	end
-
 end
 
 function EC.Default()
@@ -75,10 +95,14 @@ function EC.OptionsUpdate()
 	EC.BlackList = EC.Tool.Split(tostring(EC.DB.Custom.BlackList or ""):lower(), ",")
 	EC.PrefixTags = EC.Tool.Split(tostring(EC.DB.Custom.SearchPrefix or ""):lower(), ",")
 	EC.EnchanterTags = EC.Tool.Split(tostring(EC.DB.Custom.GenericPrefix or ""):lower(), ",")
+	EC.ManualRejectPhrases = EC.Tool.Split(tostring(EC.DB.Custom.ManualRejectPhrases or "sorry i dont have that"):lower(), ",")
 	if EC.Initialized and EC.InitPatterns then EC.InitPatterns() end
 end
 
 function EC.OptionsInit ()
+	-- Upgrade aliases before building the edit boxes so users immediately see new
+	-- defaults alongside all of their existing custom aliases.
+	EC.MergeDefaultCustomTags()
 	EC.OptionsBuilder.Init(
 		function() -- ok button
 			EC.Options.DoOk()
@@ -147,20 +171,23 @@ function EC.OptionsInit ()
 	EC.OptionsBuilder.AddSpacerToPanel()
 
 	-- Message String
-	MakeEditBoxSaved(EC.DB, "MsgPrefix", "I can do ", "Message Prefix", 445, 200, false)
+	MakeEditBoxSaved(EC.DB, "MsgPrefix", "I can do ", "Message Prefix", 365, 280, false)
 
 	-- LF Enchanter Msg String
-	MakeEditBoxSaved(EC.DB, "LfWhisperMsg", "What you looking for?", "Generic request whisper message", 445, 200, false)
+	MakeEditBoxSaved(EC.DB, "LfWhisperMsg", "What you looking for?", "Generic request whisper message", 365, 280, false)
+	MakeEditBoxSaved(EC.DB.Custom, "ManualRejectPhrases", "sorry i dont have that", "Manual no-enchant phrases (comma separated)", 365, 280, false)
+	MakeEditBoxSaved(EC.DB, "ManualRejectCooldownMinutes", 5, "Manual rejection cooldown (minutes)", 70, 280, true)
+	EC.OptionsBuilder.AddTextToCurrentPanel("When you whisper one of these phrases, that player will not receive another automatic LF Enchanter response until this cooldown expires.", 645)
 	EC.OptionsBuilder.AddSpacerToPanel()
 
 	local prefixTags = EC.Tool.Combine(EC.PrefixTags, ",")
-	MakeEditBoxSaved(EC.DB.Custom, "SearchPrefix", prefixTags, "Prefix to search for", 445, 200, false)
+	MakeEditBoxSaved(EC.DB.Custom, "SearchPrefix", prefixTags, "Prefix to search for", 365, 280, false)
 
 	local genericSearchWords = EC.Tool.Combine(EC.EnchanterTags, ",")
-	MakeEditBoxSaved(EC.DB.Custom, "GenericPrefix", genericSearchWords, "Generic request match phrases", 445, 200, false)
+	MakeEditBoxSaved(EC.DB.Custom, "GenericPrefix", genericSearchWords, "Generic request match phrases", 365, 280, false)
 
 	-- Blacklist
-	MakeEditBoxSaved(EC.DB.Custom, "BlackList", "", "Blacklisted player names", 445, 200, false)
+	MakeEditBoxSaved(EC.DB.Custom, "BlackList", "", "Blacklisted player names", 365, 280, false)
 	EC.OptionsBuilder.AddSpacerToPanel()
 
 	-- Recipe Tags - grouped by equipment slot and alphabetized within each group.
