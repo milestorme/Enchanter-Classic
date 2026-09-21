@@ -1,3 +1,20 @@
+Enchanter v1.7.1
+----------------
+- Fixed multi-enchant requests only responding to one enchant when another valid alias came from updated/custom Options data.
+- Known recipes now compile their current configured aliases every load instead of relying on alias data saved by the last /ec scan.
+- Prevented duplicate recipe mappings when multiple aliases normalize to the same phrase.
+- Requests such as "LF +7 agi gloves and minor speed to boots" can now match and send materials for both known enchants.
+- Fixed numeric enchant requests falsely matching a lower/generic enchant you actually know.
+- A request such as "+9 strength to bracer" will no longer match the plain "Strength bracer" alias and trigger an invite when Superior Strength is unknown.
+- Numeric requests now require the matching numeric recipe alias before Enchanter can whisper or auto-invite.
+
+
+Enchanter v1.7.0
+----------------
+- Fixed material whispers being missing for some enchants when reagent item links were not cached.
+- Material scanning now always uses the reagent API name/count as a fallback.
+- Clickable reagent links are still used when available, and later scans can upgrade uncached links automatically.
+
 Enchanter v1.6.9
 ----------------
 - Fixed specific requests for enchants you do not know incorrectly falling through to the generic LF Enchanter whisper.

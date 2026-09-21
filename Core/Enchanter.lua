@@ -174,14 +174,24 @@ local function BuildReagentText(index)
 	local pending = false
 
 	for reagentIndex = 1, numReagents do
-		local okReagent, _, _, numRequired = pcall(GetCraftReagentInfo, index, reagentIndex)
-		if okReagent then
-			local reagentName, reagentLink = GetReagentData(index, reagentIndex)
-			if reagentName and reagentLink then
-				local amount = tonumber(numRequired) or 0
-				table.insert(plainParts, amount > 0 and (amount .. "x " .. reagentName) or reagentName)
-				table.insert(linkedParts, amount > 0 and (amount .. "x " .. reagentLink) or reagentLink)
-			else
+		-- GetCraftReagentInfo supplies the reagent name/count even when the
+		-- clickable item link is not cached yet. Never make the mats list
+		-- depend on GetCraftReagentItemLink succeeding.
+		local okReagent, apiName, _, numRequired = pcall(GetCraftReagentInfo, index, reagentIndex)
+		if okReagent and type(apiName) == "string" and apiName ~= "" then
+			local linkedName, reagentLink = GetReagentData(index, reagentIndex)
+			local reagentName = linkedName or apiName
+			local amount = tonumber(numRequired) or 0
+			local plainPart = amount > 0 and (amount .. "x " .. reagentName) or reagentName
+			local displayReagent = reagentLink or reagentName
+			local linkedPart = amount > 0 and (amount .. "x " .. displayReagent) or displayReagent
+
+			table.insert(plainParts, plainPart)
+			table.insert(linkedParts, linkedPart)
+
+			-- A later scan can upgrade this reagent from plain text to a clickable
+			-- item link, but the current scan is already safe to use for whispers.
+			if not reagentLink then
 				pending = true
 			end
 		else
@@ -189,11 +199,14 @@ local function BuildReagentText(index)
 		end
 	end
 
-	if pending or #plainParts ~= numReagents or #linkedParts ~= numReagents then
+	-- Only withhold the list when the reagent API itself failed to identify a
+	-- reagent. Missing item links are harmless because linkedParts falls back
+	-- to the reagent name for that individual slot.
+	if #plainParts ~= numReagents or #linkedParts ~= numReagents then
 		return nil, nil, true
 	end
 
-	return table.concat(plainParts, ", "), table.concat(linkedParts, ", "), false
+	return table.concat(plainParts, ", "), table.concat(linkedParts, ", "), pending
 end
 
 local function TryForceCraftSelect(index)
@@ -631,7 +644,19 @@ function EC.InitPatterns()
 		return #a > #b
 	end)
 
-	for recipe, tags in pairs(EC.DBChar.RecipeList or {}) do
+	for recipe, storedTags in pairs(EC.DBChar.RecipeList or {}) do
+		-- RecipeList tells us which enchants this character actually knows, but its
+		-- stored alias table can be stale after an addon update. Always compile the
+		-- CURRENT aliases from Options/DB.Custom for known recipes. This is important
+		-- for multi-enchant requests where one alias may have been added after the
+		-- player's last /ec scan (for example "+7 agi gloves and minor speed").
+		local tags = nil
+		if EC.DB.Custom and type(EC.DB.Custom[recipe]) == "string" and EC.DB.Custom[recipe] ~= "" then
+			tags = EC.Tool.Split(EC.DB.Custom[recipe]:lower(), ",")
+		elseif type(storedTags) == "table" then
+			tags = storedTags
+		end
+
 		if type(tags) == "table" then
 			for _, tag in pairs(tags) do
 				tag = TrimText(tag)
@@ -642,7 +667,13 @@ function EC.InitPatterns()
 							EC.RecipeTagsMap[tag] = {}
 							table.insert(EC.RecipeTagList, tag)
 						end
-						table.insert(EC.RecipeTagsMap[tag], recipe)
+						-- Avoid duplicate recipe entries when two configured aliases normalize
+						-- to the same literal phrase (e.g. punctuation-only variants).
+						local alreadyMapped = false
+						for _, mappedRecipe in ipairs(EC.RecipeTagsMap[tag]) do
+							if mappedRecipe == recipe then alreadyMapped = true break end
+						end
+						if not alreadyMapped then table.insert(EC.RecipeTagsMap[tag], recipe) end
 					end
 				end
 			end
@@ -678,6 +709,47 @@ local function ContainsLiteralTag(text, tag)
 		end
 
 		if leftOK and rightOK then return true end
+		from = first + 1
+	end
+end
+
+-- Recipe aliases without a numeric value must not match inside a request that
+-- explicitly qualifies that same phrase with a number. Example: a character
+-- who knows "Strength bracer" must NOT treat "+9 strength to bracer" as
+-- that lower enchant. The +9 request belongs to Superior Strength and should
+-- only match its explicit numeric alias if the character actually knows it.
+local function ContainsRecipeTag(text, tag)
+	if type(text) ~= "string" or type(tag) ~= "string" or tag == "" then return false end
+	local from = 1
+	while true do
+		local first, last = text:find(tag, from, true)
+		if not first then return false end
+
+		local leftOK = true
+		local rightOK = true
+		if IsWordChar(tag:sub(1, 1)) and first > 1 then
+			leftOK = not IsWordChar(text:sub(first - 1, first - 1))
+		end
+		if IsWordChar(tag:sub(-1)) and last < #text then
+			rightOK = not IsWordChar(text:sub(last + 1, last + 1))
+		end
+
+		if leftOK and rightOK then
+			-- Normalization turns +9 into the token "9". If this alias has no
+			-- number but the immediately preceding token is numeric, this is a
+			-- more-specific numeric request, not a match for the generic alias.
+			if not tag:find("%d") then
+				local before = text:sub(1, first - 1)
+				local previous = before:match("(%S+)%s*$")
+				if previous and previous:match("^%d+$") then
+					from = first + 1
+				else
+					return true
+				end
+			else
+				return true
+			end
+		end
 		from = first + 1
 	end
 end
@@ -818,7 +890,7 @@ local function FindKnownRecipeMatches(message)
 	local recipeMatchText = NormalizeRecipeMatchText(message or "")
 
 	for _, tag in ipairs(EC.RecipeTagList) do
-		if ContainsLiteralTag(recipeMatchText, tag) then
+		if ContainsRecipeTag(recipeMatchText, tag) then
 			local recipes = EC.RecipeTagsMap[tag]
 			if recipes then
 				for _, recipe in ipairs(recipes) do
@@ -913,7 +985,7 @@ function EC.ParseMessage(msg, name)
 	-- use precomputed tag list/map for faster lookup
 	-- iterate over every known tag rather than scanning each recipe
 	for _, tag in ipairs(EC.RecipeTagList) do
-		if ContainsLiteralTag(recipeMatchText, tag) then
+		if ContainsRecipeTag(recipeMatchText, tag) then
 			local recipes = EC.RecipeTagsMap[tag]
 			if recipes then
 				if not EC.LfRecipeList[name] then EC.LfRecipeList[name] = {} end
